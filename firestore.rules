@@ -1,0 +1,72 @@
+rules_version = '2';
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Firestore security rules
+//
+//  ⚠️  READ THIS BEFORE DEPLOYING
+//
+//  Deploying rules REPLACES what is currently live. Your old app
+//  (D:\Development\trust-app) reads Firestore DIRECTLY FROM THE BROWSER under
+//  `users/**`, and its rules were written in the Firebase console — they exist
+//  nowhere in either repo. Deploying this file as-is will use the LEGACY block
+//  at the bottom for those paths, which may be more or less permissive than
+//  what you have now.
+//
+//  Run `npm run rules:fetch` first. It downloads the rules currently deployed
+//  so you can compare, and paste your real legacy rules into the block below.
+//
+// ═══════════════════════════════════════════════════════════════════════════
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  THE NEW SYSTEM — trusts/**
+    //
+    //  Every rule here is `false`, and that is not an oversight. It is the
+    //  security model.
+    //
+    //  The browser never queries Firestore in this system. `lib/firebase/
+    //  client.js` deliberately exports only Auth and Storage — no Firestore at
+    //  all. Every read and write goes through a Next.js route handler using
+    //  firebase-admin, which runs with full privileges and BYPASSES these
+    //  rules entirely.
+    //
+    //  So denying all client access costs nothing and removes a whole class of
+    //  problem: no rule can be subtly too permissive, no client can craft a
+    //  query that reads another trust's members, and the read count stays
+    //  bounded because there is no path to an unbounded client query.
+    //
+    //  Authorisation lives in `server/auth/session.js` (`requireScope`), where
+    //  it can check the verified session cookie, the role, and the trust — all
+    //  things these rules express poorly.
+    //
+    //  If you ever DO need direct client reads, do not loosen this wholesale.
+    //  Add one narrow `match` for that exact path and nothing more.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    match /trusts/{trustId}/{document=**} {
+      allow read, write: if false;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  LEGACY — the old app, still reading from the browser
+    //
+    //  Keep this until the old system is switched off. Replace the contents
+    //  with your actual console rules (`npm run rules:fetch` shows them).
+    //
+    //  The placeholder below is intentionally conservative: any signed-in user
+    //  may READ, only the owning user may WRITE. The old app has members
+    //  logging in as `regNo@gmail.com` who read the ADMIN's subtree, so a rule
+    //  like `request.auth.uid == userId` for reads WOULD LOCK THEM OUT. That is
+    //  why reads here are not scoped by uid.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    match /users/{userId}/{document=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Anything not matched above is denied — Firestore's default.
+  }
+}

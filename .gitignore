@@ -39,3 +39,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Firebase
+.firebaserc
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+# Downloaded copies of live rules — a safety net, not source of truth
+firebase-rules-backup/

@@ -1,26 +1,269 @@
 @import "tailwindcss";
 
+/*
+ * Base layer.
+ *
+ * Every colour here is a CSS custom property written at runtime by
+ * `lib/ThemeProvider.js` from the trust's own primary and accent. The values
+ * below are only the fallbacks used for the first paint, before that runs —
+ * they must never be edited to "change the theme", because the running app
+ * overwrites them a moment later. The theme lives in the settings screen.
+ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --brand: #7a1f2b;
+  --brand-hover: #9a2c3a;
+  --brand-active: #5f1620;
+  --brand-wash: #faf4f5;
+  --brand-wash-strong: #f3e3e6;
+  --brand-contrast: #ffffff;
+  --brand-a12: rgba(122, 31, 43, 0.12);
+  --brand-a24: rgba(122, 31, 43, 0.24);
+
+  --accent: #c9a33c;
+  --accent-contrast: #1a1a1a;
+  --accent-wash: #fbf6e7;
+
+  --sider-bg: #1b1424;
+  --sider-bg-end: #0e0a16;
+
+  --ink: #1a1a1f;
+  --muted: #6b7280;
+  --line: #ececf0;
+  --bg: #f6f6f9;
+  --surface: #ffffff;
+
+  --due: #d1261f;
+  --paid: #18864a;
+  --warn: #c77e12;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 3px rgba(16, 24, 40, 0.05);
+  --shadow-md: 0 6px 18px rgba(16, 24, 40, 0.07), 0 2px 6px rgba(16, 24, 40, 0.05);
+  --shadow-lg: 0 16px 40px rgba(16, 24, 40, 0.12);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
+html,
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  padding: 0;
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: 'Noto Sans Devanagari', -apple-system, BlinkMacSystemFont,
+    'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Devanagari carries matras above and below the line; the default browser
+   line height clips them at small sizes. */
+body {
+  line-height: 1.65;
+}
+
+::selection {
+  background: var(--brand-a24);
+}
+
+/* A visible focus ring, on the keyboard path only. Removing it entirely is
+   the single most common accessibility regression in an admin UI. */
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── Scrollbars ──────────────────────────────────────────────────────────── */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #c9cad1 transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #c9cad1;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #a9aab3;
+  background-clip: content-box;
+}
+
+/* ── Numbers ─────────────────────────────────────────────────────────────── */
+
+/* Tabular numerals wherever money appears, so columns line up digit for
+   digit — proportional figures make a column of rupees impossible to scan. */
+.num,
+.ant-statistic-content-value,
+.ant-table-cell[class*='right'],
+.ag-cell[col-id$='Amount'],
+.ag-cell[col-id$='Count'],
+.ag-cell[col-id='registrationNumber'] {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+
+.money-due {
+  color: var(--due);
+  font-weight: 600;
+}
+.money-paid {
+  color: var(--paid);
+  font-weight: 600;
+}
+
+/* ── Shell ───────────────────────────────────────────────────────────────── */
+
+.app-sider {
+  background: linear-gradient(180deg, var(--sider-bg) 0%, var(--sider-bg-end) 100%) !important;
+  border-inline-end: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.08);
+}
+
+.app-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 64px;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+.app-brand__mark {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, var(--accent), var(--accent) 60%, var(--accent-hover, var(--accent)));
+  color: var(--accent-contrast);
+  font-weight: 700;
+  font-size: 14px;
+  object-fit: contain;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+}
+.app-brand__name {
+  color: #fff;
+  font-weight: 600;
+  font-size: 14px;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* The active nav item gets a small accent bar rather than a filled block —
+   at eight items a column of filled blocks reads as noise. */
+.app-nav .ant-menu-item-selected::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent);
+}
+.app-nav .ant-menu-item {
+  position: relative;
+  border-radius: 8px;
+  margin-inline: 8px;
+  font-size: 13.5px;
+}
+.app-nav .ant-menu-item-selected {
+  font-weight: 600;
+}
+
+.app-header {
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(8px);
+}
+
+/* ── Cards ───────────────────────────────────────────────────────────────── */
+
+.ant-card {
+  box-shadow: var(--shadow-sm);
+  border-color: var(--line);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+.ant-card-hoverable:hover {
+  box-shadow: var(--shadow-lg);
+}
+
+/* ── Stat cards ──────────────────────────────────────────────────────────── */
+
+.stat-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius) !important;
+}
+.stat-card::after {
+  content: '';
+  position: absolute;
+  top: -40%;
+  right: -20%;
+  width: 130px;
+  height: 130px;
+  border-radius: 50%;
+  background: var(--stat-glow, var(--brand));
+  opacity: 0.06;
+  pointer-events: none;
+}
+
+/* ── Page header ─────────────────────────────────────────────────────────── */
+
+.page-title {
+  letter-spacing: -0.01em;
+}
+
+/* ── AG Grid ─────────────────────────────────────────────────────────────── */
+
+.grid-wrap {
+  width: 100%;
+  height: calc(100vh - 320px);
+  min-height: 340px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+/* ── Buttons: subtle lift on primary ─────────────────────────────────────── */
+
+.ant-btn-primary:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px var(--brand-a24);
+}
+.ant-btn-primary:not(:disabled) {
+  transition: transform 0.15s ease, box-shadow 0.2s ease;
+}
+
+/* ── Print ───────────────────────────────────────────────────────────────── */
+
+@media print {
+  .no-print,
+  .ant-layout-sider,
+  .ant-layout-header,
+  .ant-pagination {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+  .grid-wrap {
+    height: auto;
+    box-shadow: none;
+    border: none;
+  }
 }

@@ -1,0 +1,403 @@
+{
+  "//": [
+    "Composite indexes for every query this system runs.",
+    "",
+    "Scope is COLLECTION with a collectionGroup name, which covers the same",
+    "collection under every trust and program — you never add indexes when a",
+    "new trust or program is created.",
+    "",
+    "If a query is ever added without its index, Firestore fails with an error",
+    "containing a one-click console link. Add the index HERE too, or the next",
+    "deploy silently removes it.",
+    "",
+    "The fieldOverrides at the bottom are a real cost saving, not tidiness —",
+    "see the note there.",
+    "",
+    "Do NOT list `__name__` in a field list. Firestore appends it to every",
+    "composite index automatically, so an entry that spells it out is the SAME",
+    "index as one that does not — and deploying both fails with",
+    "HTTP 409 'index already exists'."
+  ],
+  "indexes": [
+    {
+      "collectionGroup": "members",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "programId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "delete_flag",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "registrationNumber",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "members",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "programId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "delete_flag",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "registrationNumber",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "members",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "programId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "delete_flag",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "joinDateMs",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "members",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "programId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "delete_flag",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "joinDateMs",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "members",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "programId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "delete_flag",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "agentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "dueAmount",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "members",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "programId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "delete_flag",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "agentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "dueCount",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "members",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "delete_flag",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "registrationNumber",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "//": "Receipt register — all receipts, newest first.",
+      "collectionGroup": "payments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "delete_flag",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "paidAtMs",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "//": "One member's receipts (the ledger drawer).",
+      "collectionGroup": "payments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "delete_flag",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "memberId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "paidAtMs",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "//": "What one agent collected.",
+      "collectionGroup": "payments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "delete_flag",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "collectedByAgentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "paidAtMs",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "//": [
+        "revertClosing — who actually paid for closing #seq.",
+        "This one index is why a revert touches a few hundred payers instead of",
+        "deleting millions of rows the way the old system did."
+      ],
+      "collectionGroup": "payments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "seqs",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "//": "An agent's commission entries, newest first.",
+      "collectionGroup": "commission_entries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "agentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "earnedAtMs",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "commission_entries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "agentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "earnedAtMs",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "commission_payouts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "agentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "paidAtMs",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "//": "Agents list — active only, by name.",
+      "collectionGroup": "agents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "delete_flag",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "active",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "displayName",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "agents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "delete_flag",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "displayName",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "//": "Duplicate-phone check when adding an agent.",
+      "collectionGroup": "agents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "delete_flag",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "phone",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "members",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "programId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "delete_flag",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "searchKeywords",
+          "arrayConfig": "CONTAINS"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": [
+    {
+      "//": [
+        "THIS IS A REAL COST SAVING, NOT HOUSEKEEPING.",
+        "",
+        "Firestore indexes every element of an array field separately. A member",
+        "who has paid 300 closings out of order carries 300 entries in",
+        "`paidSeqs` — so one write to that member would write 300 index entries",
+        "as well, and index storage grows with it.",
+        "",
+        "We never query by paidSeqs; it is read as part of the member document",
+        "and computed over in memory. So indexing it is pure waste, and turning",
+        "it off makes every payment cheaper.",
+        "",
+        "Same for exemptSeqs, and for the display-only detail arrays."
+      ],
+      "collectionGroup": "members",
+      "fieldPath": "paidSeqs",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "members",
+      "fieldPath": "exemptSeqs",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "members",
+      "fieldPath": "extraDetails",
+      "indexes": []
+    },
+    {
+      "//": [
+        "`items` holds the full receipt lines with names and amounts — never",
+        "queried. `seqs` IS queried (array-contains, for revert), so it keeps",
+        "its index; that is exactly why the two are separate fields."
+      ],
+      "collectionGroup": "payments",
+      "fieldPath": "items",
+      "indexes": []
+    },
+    {
+      "//": "The shared index documents: one big array each, read whole, never queried.",
+      "collectionGroup": "indexes",
+      "fieldPath": "items",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "programs",
+      "fieldPath": "ageGroups",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "programs",
+      "fieldPath": "locationGroups",
+      "indexes": []
+    }
+  ]
+}

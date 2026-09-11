@@ -1,0 +1,118 @@
+rules_version = '2';
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Storage security rules
+//
+//  Unlike Firestore, Storage IS written directly from the browser — member
+//  photos, ID documents, agent signatures. Uploading through our own server
+//  would mean a 6 MB phone photo travelling through a route handler and
+//  competing with its body-size limit, for no benefit.
+//
+//  So these rules do real work, and they are the only client-facing rules in
+//  the system that matter.
+// ═══════════════════════════════════════════════════════════════════════════
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // 15 MB matches the client-side guard in PhotoUpload / MultiFileUpload.
+    // Images are downscaled to ~200 KB before upload; the cap is really for
+    // PDFs and for anything that slips past the browser check.
+    function withinSize() {
+      return request.resource.size < 15 * 1024 * 1024;
+    }
+
+    function isImage() {
+      return request.resource.contentType.matches('image/.*');
+    }
+
+    function isDocument() {
+      return isImage()
+        || request.resource.contentType == 'application/pdf';
+    }
+
+    // ── Member photos and documents ──────────────────────────────────────
+    // Path: members/{year}/{filename}
+    match /members/{year}/{file} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && withinSize() && isDocument();
+      // Never deleted from the client. A photo may be referenced by a printed
+      // receipt or certificate, and a mis-click must not destroy it. Removing
+      // one from a record only drops the URL; clearing the blob is an admin
+      // job done deliberately.
+      allow delete: if false;
+    }
+
+    // ── Agent photos, signatures, ID documents ───────────────────────────
+    match /agents/{agentId}/{path=**} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && withinSize() && isDocument();
+      allow delete: if false;
+    }
+
+    // ── Generic document uploads (MultiFileUpload default folder) ────────
+    match /documents/{file} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && withinSize() && isDocument();
+      allow delete: if false;
+    }
+
+    // ── Trust branding: logo, seal, signature, header, banner ────────────
+    //
+    // Path: trust/{kind}/{year}/{file} — what the settings screen actually
+    // writes. This rule used to name `trusts/{trustId}/branding/{file}` and
+    // deny all client writes, on the assumption that branding uploads went
+    // through the server. They do not: `PhotoUpload` writes to Storage from
+    // the browser exactly like a member photo does, so every logo upload was
+    // refused with `storage/unauthorized` and the settings screen had no way
+    // to put a logo on a receipt.
+    //
+    // Admin-only by custom claim. A user whose claim has not propagated yet
+    // (set server-side, refreshed on the client within the hour) is let
+    // through rather than locked out of setup — the token cannot be forged,
+    // so the only people this admits are ones the server has not finished
+    // labelling. An agent, whose token says `agent`, is refused.
+    function isTrustAdmin() {
+      return signedIn()
+        && (!('role' in request.auth.token)
+            || request.auth.token.role == 'owner'
+            || request.auth.token.role == 'admin');
+    }
+
+    match /trust/{kind}/{year}/{file} {
+      // Open read: these appear on certificates and receipts that are opened
+      // and printed outside the app.
+      allow read: if true;
+      allow create, update: if isTrustAdmin() && withinSize() && isImage();
+      allow delete: if false;
+    }
+
+    // Server-written branding, kept for anything uploaded through a route.
+    match /trusts/{trustId}/branding/{file} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // ── Generated PDFs (receipts, lists, statements) ─────────────────────
+    // Written by the server only; read by whoever holds the signed URL.
+    match /trusts/{trustId}/pdf/{path=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    // ── Legacy paths, for the old app while it is still running ──────────
+    match /users/{userId}/{path=**} {
+      allow read: if signedIn();
+      allow write: if signedIn() && withinSize();
+    }
+
+    // Everything else is denied.
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}
