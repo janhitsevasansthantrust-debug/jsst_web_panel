@@ -150,6 +150,14 @@ export const memberCreate = z.object({
   // नामांकन शुल्क
   joinFeesDone: z.boolean().optional().default(false),
   joinFeesTxtId: optionalText(80),
+  /**
+   * How the joining fee was taken.
+   *
+   * Needed because marking the fee paid now writes a real receipt rather than
+   * flipping a flag — and a receipt with no payment method is a receipt nobody
+   * can reconcile against a cash box or a bank statement.
+   */
+  joinFeesMethod: z.enum(Object.values(PAYMENT_METHOD)).optional(),
 
   registrationNumber: z.string().trim().max(20).optional(),
   status: z.enum(Object.values(MEMBER_STATUS)).optional(),
@@ -253,11 +261,25 @@ export const closingCreate = z.object({
   closingDate: optionalText(20),
   closingDateMs: dateMs,
   closingType: z.enum(Object.values(CLOSING_TYPE)).optional(),
-  amountPerMember: money.optional(),
+  /**
+   * No `amountPerMember`.
+   *
+   * Each member pays the rate on their own record, from their age band. A
+   * figure supplied here never changed that — it only changed the total the
+   * screen reported, so the screen and the receipts disagreed. The server now
+   * sums the members instead.
+   */
   groupId: z.string().optional().nullable(),
   groupName: optionalText(120),
   /** Which क्लोजिंग समूह this closing is billed on. Validated server-side. */
   batchId: z.string().optional().nullable(),
+  /**
+   * Whether blocked (निष्क्रिय) members are billed for this closing.
+   *
+   * Decided per closing and frozen on it. Defaults to true, which is what the
+   * trust has always done — a block is a warning, not an exit.
+   */
+  includeBlocked: z.boolean().optional().default(true),
   invitationCardURL: z.string().url().optional().or(z.literal('')),
   notes: optionalText(1000),
   pdfData: z.record(z.string(), z.any()).optional(),
@@ -277,6 +299,13 @@ export const closingBatchCreate = z.object({
   dueDateMs: dateMs.optional().nullable(),
   paymentNote: optionalText(600),
   invitationCardURL: z.string().url().optional().or(z.literal('')),
+});
+
+/** Which closings to put on a batch's notice, or take off it. */
+export const batchClosingsPatch = z.object({
+  closingIds: z.array(z.string().min(1)).min(1, 'कोई क्लोजिंग नहीं चुनी').max(200),
+  /** true sends them to no batch at all, rather than to this one. */
+  remove: z.boolean().optional().default(false),
 });
 
 export const closingBatchUpdate = asPatch(closingBatchCreate)

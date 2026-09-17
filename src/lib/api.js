@@ -138,6 +138,13 @@ export const api = {
      */
     searchIndex: (params) => request(`/members/search-index${qs(params)}`),
     byPhone: (phone) => request(`/members/by-phone${qs({ phone })}`),
+    /**
+     * Is this आधार already on someone in this योजना? Used by the member form
+     * as the number is typed, so the clash is found before the rest of the
+     * form is filled in rather than on Save.
+     */
+    byAadhaar: (aadhaar, except) =>
+      request(`/members/by-aadhaar${qs({ aadhaar, except })}`),
     get: (id) => request(`/members/${id}`),
     create: (body) => request('/members', { method: 'POST', body }),
     update: (id, body) => request(`/members/${id}`, { method: 'PATCH', body }),
@@ -171,6 +178,11 @@ export const api = {
     collection: (id, params) => request(`/closings/${id}/collection${qs(params)}`),
     revert: (id, body) => request(`/closings/${id}/revert`, { method: 'POST', body }),
     closable: (q) => request(`/closings/closable${qs({ q })}`),
+    /**
+     * The क्लोजिंग सूची for a period — the office's register page, with what
+     * each closing was billed at and what has come in against it.
+     */
+    listPdfUrl: (params) => apiUrl(`/closings/list-pdf${qs(params)}`),
   },
 
   /**
@@ -184,10 +196,28 @@ export const api = {
     get: (id) => request(`/closing-batches/${id}`),
     create: (body) => request('/closing-batches', { method: 'POST', body }),
     update: (id, body) => request(`/closing-batches/${id}`, { method: 'PATCH', body }),
+    /** Closings not yet on this notice — including ones on another batch. */
+    assignable: (id) => request(`/closing-batches/${id}/closings`),
+    addClosings: (id, closingIds) =>
+      request(`/closing-batches/${id}/closings`, { method: 'POST', body: { closingIds } }),
+    removeClosings: (id, closingIds) =>
+      request(`/closing-batches/${id}/closings`, {
+        method: 'POST',
+        body: { closingIds, remove: true },
+      }),
     /** Freeze the batch: no more closings may be added once the sheet is out. */
     issue: (id) => request(`/closing-batches/${id}`, { method: 'PATCH', body: { status: 'issued' } }),
     /** The printable सूचना पत्र. A URL, because it goes straight to a printer. */
     noticeUrl: (id) => apiUrl(`/closing-batches/${id}/notice`),
+    /**
+     * The two collection documents: a सहयोग राशि रसीद per member, and the
+     * agent-wise सारांश that goes on top of the stack. One endpoint because
+     * they are one calculation — see the route for why that matters.
+     */
+    receiptsUrl: (id, agentId) =>
+      apiUrl(`/closing-batches/${id}/bills${qs({ doc: 'receipts', agentId })}`),
+    summaryUrl: (id, agentId) =>
+      apiUrl(`/closing-batches/${id}/bills${qs({ doc: 'summary', agentId })}`),
   },
 
   /* programs & groups */

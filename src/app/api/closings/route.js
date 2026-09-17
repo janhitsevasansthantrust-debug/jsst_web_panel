@@ -1,4 +1,4 @@
-import { handler, ok, okCached, readBody } from '../../../server/http.js';
+import { handler, ok, readBody } from '../../../server/http.js';
 import { requireScope } from '../../../server/auth/session.js';
 import { createClosing, listClosings } from '../../../server/domain/closings.js';
 import { closingCreate } from '../../../config/schemas.js';
@@ -7,9 +7,18 @@ import { ROLE } from '../../../config/constants.js';
 /**
  * GET /api/closings — every closing, from the shared index.
  *
- * ONE Firestore read serves this for the whole trust, and the response is
- * cached in the browser for a minute on top of that. The old system read all
+ * ONE Firestore read serves this for the whole trust. The old system read all
  * 500 closing documents on every screen that needed them.
+ *
+ * NOT browser-cached, though it was for a minute. That minute was the reason
+ * reverting a closing appeared to do nothing: the revert succeeded, the query
+ * was invalidated, the refetch went out — and the browser answered it from its
+ * own cache with the pre-revert list. The closing sat there marked चालू for up
+ * to sixty seconds, so the only sensible conclusion was that the revert had
+ * failed. The same applied to a newly created closing.
+ *
+ * The cache was buying nothing anyway: the index is already memoised on the
+ * server, so a repeat call is zero Firestore reads with or without it.
  */
 export const GET = handler(async (request) => {
   const scope = await requireScope(request, ROLE.AGENT);
@@ -17,7 +26,7 @@ export const GET = handler(async (request) => {
     new URL(request.url).searchParams.get('includeReverted') === 'true';
 
   const result = await listClosings(scope, { includeReverted });
-  return okCached(result, 60);
+  return ok(result);
 });
 
 /**

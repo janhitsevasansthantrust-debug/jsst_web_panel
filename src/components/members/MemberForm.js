@@ -42,7 +42,7 @@ const { Text, Paragraph } = Typography;
  */
 export default function MemberForm({ open, onClose, member }) {
   const [form] = Form.useForm();
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const t = useT();
   const queryClient = useQueryClient();
   const editing = Boolean(member?.id);
@@ -184,6 +184,7 @@ export default function MemberForm({ open, onClose, member }) {
         status: MEMBER_STATUS.ACCEPTED,
         addedBy: 'admin',
         joinFeesDone: false,
+        joinFeesMethod: 'cash',
         extraDetails: [],
       });
     }
@@ -251,9 +252,35 @@ export default function MemberForm({ open, onClose, member }) {
         queryClient.invalidateQueries({ queryKey: ['members'] });
         queryClient.invalidateQueries({ queryKey: keys.stats });
       }
+      // The joining fee now produces a receipt. Offer it immediately — the
+      // member is still standing at the counter, and this is the moment they
+      // are owed a piece of paper for the money they just handed over.
+      const receiptId = res.member?.joinFeesReceiptId;
+      if (receiptId) {
+        modal.success({
+          title: t('नामांकन शुल्क की रसीद बन गई'),
+          content: t('सदस्य को रसीद दे दीजिए।'),
+          okText: t('रसीद छापें'),
+          cancelText: t('बाद में'),
+          okCancel: true,
+          onOk: () => window.open(api.payments.receiptUrl(receiptId), '_blank'),
+        });
+      }
+
       onClose();
     },
-    onError: (err) => message.error(err.message),
+    onError: (err) => {
+      message.error(err.message);
+
+      // A refusal that names a field belongs ON that field. Otherwise the
+      // toast disappears after four seconds and the operator is left staring
+      // at a form that looks perfectly fine.
+      const field = err.details?.field;
+      if (field) {
+        form.setFields([{ name: field, errors: [err.message] }]);
+        form.scrollToField(field, { behavior: 'smooth', block: 'center' });
+      }
+    },
   });
 
   // Only meaningful once a योजना is chosen — before that there is simply
@@ -525,7 +552,43 @@ export default function MemberForm({ open, onClose, member }) {
             <Form.Item
               name="aadhaarNo"
               label={t('आधार संख्या')}
-              rules={[{ pattern: /^\d{12}$/, message: t('12 अंक होने चाहिए') }]}
+              // 'onBlur' must be listed HERE as well: antd only honours a
+              // rule-level `validateTrigger` that is a subset of the field's,
+              // so without this the duplicate check would simply never run.
+              validateTrigger={['onChange', 'onBlur']}
+              rules={[
+                { pattern: /^\d{12}$/, message: t('12 अंक होने चाहिए') },
+                /**
+                 * The same person must not be registered twice in one योजना.
+                 *
+                 * Checked on blur rather than on every keystroke: a validator
+                 * that fires per character would send twelve requests to find
+                 * out about one number. The server refuses the duplicate on
+                 * save in any case — this only moves the discovery to the
+                 * moment the operator leaves the field, instead of after they
+                 * have filled in the whole form.
+                 */
+                {
+                  validateTrigger: 'onBlur',
+                  validator: async (_rule, value) => {
+                    const clean = String(value ?? '').replace(/\D+/g, '');
+                    if (clean.length !== 12) return;
+
+                    const { member: clash } = await api.members.byAadhaar(
+                      clean,
+                      member?.id,
+                    );
+                    if (!clash) return;
+
+                    throw new Error(
+                      t('यह आधार पहले से दर्ज है — {name} (रजि. {reg})', {
+                        name: clash.displayName || '—',
+                        reg: clash.registrationNumber || '—',
+                      }),
+                    );
+                  },
+                },
+              ]}
             >
               <Input maxLength={12} placeholder={t('12 अंकों का आधार')} />
             </Form.Item>
@@ -758,11 +821,25 @@ export default function MemberForm({ open, onClose, member }) {
             </Form.Item>
           </Col>
           {joinFeesDone && (
-            <Col xs={24} md={16}>
-              <Form.Item name="joinFeesTxtId" label={t('लेन-देन आईडी')}>
-                <Input placeholder="Transaction ID" />
-              </Form.Item>
-            </Col>
+            <>
+              <Col xs={12} md={8}>
+                {/* Marking the fee paid writes a real receipt, so it needs a
+                    method — a receipt that does not say how the money came in
+                    cannot be reconciled against a cash box or a statement. */}
+                <Form.Item
+                  name="joinFeesMethod"
+                  label={t('भुगतान का तरीक़ा')}
+                  rules={[{ required: true, message: t('तरीक़ा चुनें') }]}
+                >
+                  <Select options={masters.paymentMethods} />
+                </Form.Item>
+              </Col>
+              <Col xs={12} md={8}>
+                <Form.Item name="joinFeesTxtId" label={t('लेन-देन आईडी')}>
+                  <Input placeholder="Transaction ID" />
+                </Form.Item>
+              </Col>
+            </>
           )}
         </Row>
 

@@ -9,6 +9,8 @@ import {
   rebuildClosingsIndex,
 } from './indexes.js';
 import { resolveBatch, bumpBatch } from './closingBatches.js';
+import { getMembersIndex } from './indexes.js';
+import { eligibleForClosing } from '../../lib/closingEligibility.js';
 import { badRequest, conflict, notFound } from '../http.js';
 import { assertSameProgram } from './scope.js';
 import {
@@ -85,20 +87,37 @@ export async function createClosing(scope, input) {
    * It is a REPORTING figure. The authoritative obligation is always derived
    * per member from dates, so a stale snapshot can never mis-bill anyone.
    */
-  const membersRef = db
-    .collection(paths.members(trustId))
-    .where('programId', '==', programId);
-  const eligibleCount = await countQuery(
-    membersRef
-      .where('delete_flag', '==', false)
-      .where('status', '==', MEMBER_STATUS.ACCEPTED)
-      .where('joinDateMs', '<=', closingDateMs),
-  );
+  /**
+   * What this closing is expected to raise — summed from the members.
+   *
+   * Read from the shared member index, which is already in memory, so this
+   * costs nothing and gives the exact total rather than a count. The old code
+   * ran an aggregation query for the count and multiplied it by a rate typed
+   * into the form; see `lib/closingEligibility.js` for why that rate was
+   * always the wrong one.
+   */
+  const includeBlocked = input.includeBlocked !== false;
 
-  const amountPerMember =
-    Number(input.amountPerMember) ||
-    Number(member.payAmount) ||
-    LIMITS.DEFAULT_PAY_AMOUNT;
+  const eligible = eligibleForClosing((await getMembersIndex(trustId)).items, {
+    programId,
+    closingDateMs,
+    exceptMemberId: input.memberId,
+    includeBlocked,
+  });
+
+  const eligibleCount = eligible.count;
+
+  /**
+   * A fallback rate, NOT a rate for everybody.
+   *
+   * `ledger.amountFor` puts each member's own `payAmount` ahead of this, so it
+   * is reached only by a member who has no rate of their own — and it is the
+   * average of the members who do, which is the least surprising thing to
+   * charge them. It is deliberately no longer taken from the request: a number
+   * typed into the closing form could never change anybody's dues, only the
+   * reported total, which made the screen and the receipts disagree.
+   */
+  const amountPerMember = eligible.typicalAmount;
 
   /**
    * The notice this closing will be billed on.
@@ -143,6 +162,9 @@ export async function createClosing(scope, input) {
       closingDateMs,
       closingType: input.closingType ?? 'marriage',
       amountPerMember,
+      // Frozen here. See `ledger.isEligible` for why it must never become a
+      // setting that can be changed after the fact.
+      includeBlocked,
 
       // The यूनिट the member belonged to — their rate card.
       groupId: input.groupId ?? member.groupId ?? null,
@@ -157,7 +179,10 @@ export async function createClosing(scope, input) {
       pdfData: input.pdfData ?? {},
 
       eligibleCount,
-      eligibleAmount: eligibleCount * amountPerMember,
+      // The SUM of what each eligible member pays, not count × one rate.
+      eligibleAmount: eligible.amount,
+      /** Band-by-band, so the collection sheet can be read at a glance. */
+      eligibleByBand: eligible.byBand,
       paidCount: 0,
       paidAmount: 0,
 
@@ -528,6 +553,21 @@ export async function getClosingCollection(scope, closingId, { cursor, limit = L
       pendingCount: Math.max(0, (closing.eligibleCount ?? 0) - (closing.paidCount ?? 0)),
       pendingAmount: Math.max(0, (closing.eligibleAmount ?? 0) - (closing.paidAmount ?? 0)),
       status: closing.status,
+
+      /**
+       * What happened when it was taken back.
+       *
+       * All of this was already being written by `revertClosing` and none of
+       * it was ever read: the only sign a closing had been reverted was a red
+       * tag, with no date, no reason, no who, and no figure for what was
+       * credited back to members. A reversal of money that the system cannot
+       * explain afterwards is not an audit trail, it is a rumour.
+       */
+      revertedAtMs: closing.revertedAtMs ?? null,
+      revertedBy: closing.revertedBy ?? null,
+      revertReason: closing.revertReason ?? '',
+      revertedPayerCount: closing.revertedPayerCount ?? 0,
+      revertedAmount: closing.revertedAmount ?? 0,
     },
     rows,
     nextCursor: snap.size === limit && last ? last.get('joinDateMs') : null,

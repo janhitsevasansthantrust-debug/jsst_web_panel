@@ -36,7 +36,10 @@ export default function MemberDetailsDrawer({ memberId, open, onClose, onEdit })
 
   const { data, isLoading, error } = useQuery({
     queryKey: keys.memberLedger(memberId),
-    queryFn: () => api.members.ledger(memberId),
+    // 200, not the default 20. This tab is the member's account — somebody
+    // asking "what have I paid" means all of it, and a list that silently
+    // stops at twenty is one they will dispute.
+    queryFn: () => api.members.ledger(memberId, { receipts: 200 }),
     enabled: open && Boolean(memberId),
   });
 
@@ -491,7 +494,7 @@ function LedgerTab({ data }) {
         )}
       </Card>
 
-      <Card size="small" title={t('हाल की रसीदें ({n})', { n: data.receipts.length })}>
+      <Card size="small" title={t('भुगतान इतिहास ({n} रसीदें)', { n: data.receipts.length })}>
         {data.receipts.length === 0 ? (
           <Empty description={t('कोई रसीद नहीं')} image={Empty.PRESENTED_IMAGE_SIMPLE} />
         ) : (

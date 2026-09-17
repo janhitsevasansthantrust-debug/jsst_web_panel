@@ -1,5 +1,5 @@
 import { db, serverNow } from '../firebase/admin.js';
-import { conflict } from '../http.js';
+import { conflict } from '../errors.js';
 import { ROLE, paths } from '../../config/constants.js';
 import { DEFAULT_PRIMARY, DEFAULT_ACCENT } from '../../lib/theme.js';
 

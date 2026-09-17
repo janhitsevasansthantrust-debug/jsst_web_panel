@@ -2,38 +2,39 @@ import 'server-only';
 
 import { NextResponse } from 'next/server';
 
+export {
+  AppError,
+  badRequest,
+  unauthorized,
+  forbidden,
+  notFound,
+  conflict,
+  tooLarge,
+} from './errors.js';
+
+/**
+ * …and imported again, for use INSIDE this file.
+ *
+ * `export … from` is a pure re-export: it forwards the names to importers and
+ * brings NOTHING into this module's own scope. Without this second line
+ * `fail()` threw `ReferenceError: AppError is not defined` on every error it
+ * was asked to render, and `readBody()` did the same on every validation
+ * failure — so a bad request came back as a 500 with an empty body instead of
+ * the message that says what was wrong.
+ */
+import { AppError, badRequest } from './errors.js';
+
 /**
  * Uniform HTTP plumbing for every route handler.
  *
  * The old project repeated the same 15 lines of token parsing, try/catch and
  * error shaping in every one of its 20 route files, with slightly different
  * behaviour in each. Everything lives here instead.
+ *
+ * The typed errors are re-exported from `errors.js` (which has no framework
+ * dependency) so route handlers keep one import line while the plain-Node
+ * scripts that share the domain layer stay free of `next/server`.
  */
-
-/* ── Typed errors ────────────────────────────────────────────────────────── */
-
-export class AppError extends Error {
-  constructor(message, { status = 400, code = 'bad_request', details } = {}) {
-    super(message);
-    this.name = 'AppError';
-    this.status = status;
-    this.code = code;
-    this.details = details;
-  }
-}
-
-export const badRequest = (m, details) =>
-  new AppError(m, { status: 400, code: 'bad_request', details });
-export const unauthorized = (m = 'Not signed in') =>
-  new AppError(m, { status: 401, code: 'unauthorized' });
-export const forbidden = (m = 'Not allowed') =>
-  new AppError(m, { status: 403, code: 'forbidden' });
-export const notFound = (m = 'Not found') =>
-  new AppError(m, { status: 404, code: 'not_found' });
-export const conflict = (m, details) =>
-  new AppError(m, { status: 409, code: 'conflict', details });
-export const tooLarge = (m) =>
-  new AppError(m, { status: 413, code: 'too_large' });
 
 /* ── Responses ───────────────────────────────────────────────────────────── */
 

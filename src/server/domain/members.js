@@ -15,6 +15,7 @@ import {
   resolveRegistrationConfig, formatRegistration, nextSequential,
   randomRegistrationNumber, REGISTRATION_MODE,
 } from '../../lib/registration.js';
+import { postPayment } from './payments.js';
 import { memberKeywords } from '../../lib/memberSearch.js';
 import { badRequest, conflict, notFound } from '../http.js';
 import { assertSameProgram } from './scope.js';
@@ -22,6 +23,7 @@ import {
   LIMITS,
   MEMBER_STATUS,
   EXIT_REASON,
+  PAYMENT_METHOD,
   paths,
 } from '../../config/constants.js';
 
@@ -61,6 +63,85 @@ async function drawUniqueRandom(membersRef, config) {
 
   throw conflict(
     'नया रजिस्ट्रेशन नंबर नहीं बन सका — योजना की सेटिंग में अंकों की संख्या बढ़ाएँ',
+  );
+}
+
+/**
+ * The member of this योजना holding this आधार, if any.
+ *
+ * Equality on three fields, so Firestore serves it without a composite index.
+ * `limit(2)` rather than 1: when editing a member, the first hit is usually
+ * themselves, and one more is needed to tell "nobody else has it" from "I only
+ * looked at myself".
+ */
+async function lookupAadhaar(trustId, programId, aadhaar, { exceptId } = {}) {
+  const clean = String(aadhaar ?? '').replace(/\D+/g, '');
+  if (clean.length !== 12) return null;
+
+  const snap = await db
+    .collection(paths.members(trustId))
+    .where('programId', '==', programId)
+    .where('delete_flag', '==', false)
+    .where('aadhaarNo', '==', clean)
+    .limit(2)
+    .get();
+
+  return snap.docs.find((d) => d.id !== exceptId) ?? null;
+}
+
+/**
+ * Who holds this आधार in this योजना — for the form to warn as it is typed.
+ *
+ * Returns the same person the save would refuse for, so the warning and the
+ * refusal can never disagree.
+ */
+export async function findMemberByAadhaar(scope, aadhaar, { exceptId } = {}) {
+  const doc = await lookupAadhaar(scope.trustId, scope.programId, aadhaar, { exceptId });
+  if (!doc) return null;
+
+  const m = doc.data();
+  return {
+    id: doc.id,
+    displayName: m.displayName ?? '',
+    registrationNumber: m.registrationNumber ?? '',
+    fatherName: m.fatherName ?? '',
+    village: m.village ?? '',
+    phone: m.phone ?? '',
+    status: m.status ?? '',
+  };
+}
+
+/**
+ * Refuse a आधार number that is already on another member of this योजना.
+ *
+ * Scoped to the PROGRAM, not the trust: the same person joining a second
+ * योजना is a normal thing and must not be blocked. Joining the same one
+ * twice is what this stops — which is how a household ends up paying two
+ * contributions for one member and nobody notices until the closing sheet is
+ * a name longer than the register.
+ *
+ * `exceptId` is the member being edited, so saving a member without touching
+ * their आधार does not report them as their own duplicate.
+ *
+ * The check is a query run BEFORE the transaction, not a uniqueness document
+ * written inside it. Two operators entering the same आधार in the same second
+ * could still slip past, and that is an accepted trade: the alternative is an
+ * index document that has to be created, moved and deleted in step with every
+ * member write, and a bug in that bookkeeping blocks a real person from being
+ * registered at all. A query reads the truth and cannot drift from it.
+ */
+async function assertAadhaarFree(trustId, programId, aadhaar, { exceptId } = {}) {
+  const other = await lookupAadhaar(trustId, programId, aadhaar, { exceptId });
+  if (!other) return;
+
+  const m = other.data();
+
+  // The message names WHO holds it. "आधार पहले से दर्ज है" sends the operator
+  // to search for it; this sends them straight to the member.
+  throw conflict(
+    `यह आधार नंबर पहले से दर्ज है — ${m.displayName || 'सदस्य'}` +
+    `${m.registrationNumber ? ` (रजि. ${m.registrationNumber})` : ''}`,
+    { memberId: other.id, field: 'aadhaarNo' },
   );
 }
 
@@ -132,6 +213,8 @@ export async function createMember(scope, input) {
       );
     }
   }
+
+  await assertAadhaarFree(trustId, programId, input.aadhaarNo);
 
   const { items: closings } = await getClosingsIndex(trustId, programId);
 
@@ -225,7 +308,21 @@ export async function createMember(scope, input) {
       memberGroup: rates.memberGroup,
       groupType: rates.groupType,
 
-      joinFeesDone: Boolean(input.joinFeesDone),
+      /**
+       * Always false here, even when the operator ticked "शुल्क जमा हो गया".
+       *
+       * The fee is marked paid by POSTING A RECEIPT, just below — never by
+       * setting this flag. Before, ticking the box set the flag and nothing
+       * else: no receipt to print, no entry in the day's collection, and no
+       * commission for the agent who had just enrolled the member and taken
+       * their money. The trust's books showed a fee that had been collected by
+       * nobody, on no date, for which no paper existed.
+       *
+       * Writing `false` and letting the receipt flip it also means a failure
+       * leaves the honest state — fee outstanding — rather than money marked
+       * collected with no record of it.
+       */
+      joinFeesDone: false,
       joinFeesTxtId: input.joinFeesTxtId ?? '',
       joinFeesReceiptId: null,
 
@@ -326,6 +423,41 @@ export async function createMember(scope, input) {
   });
 
   await patchMemberInIndex(trustId, created.id, created);
+
+  /**
+   * The joining fee, taken at the counter as the member was enrolled.
+   *
+   * A separate transaction on purpose. It cannot join the one above — that one
+   * allocates the registration number and must not be held open across a
+   * second set of reads — and the ordering is the safe one: if this fails the
+   * member exists with the fee still showing as due, which is a five-second
+   * fix at the desk. The other way round would be a receipt pointing at a
+   * member who does not exist.
+   */
+  if (input.joinFeesDone && Number(created.joinFees) > 0) {
+    const fee = await postPayment(scope, {
+      memberId: created.id,
+      seqs: [],
+      joinFeeAmount: Number(created.joinFees),
+      method: input.joinFeesMethod ?? PAYMENT_METHOD.CASH,
+      paidAtMs: created.joinDateMs ?? Date.now(),
+      reference: input.joinFeesTxtId ?? '',
+      note: 'नामांकन शुल्क',
+      // Whoever enrolled them collected it. This is the line that pays the
+      // agent their enrolment commission, through exactly the same code path
+      // as every other receipt.
+      collectedByAgentId: created.agentId ?? null,
+      idempotencyKey: `joinfee:${created.id}`,
+    });
+
+    return {
+      ...created,
+      joinFeesDone: true,
+      joinFeesReceiptId: fee.receipt?.id ?? null,
+      joinFeeReceipt: fee.receipt ?? null,
+    };
+  }
+
   return created;
 }
 
@@ -372,6 +504,12 @@ export async function updateMember(scope, memberId, patch) {
           patch.addedBy === 'agent' ? patch.agentId : null,
         )
       : null;
+
+  // Before the transaction, because a transaction cannot run a query — and
+  // after `reassigned` so both pre-flight reads happen before anything locks.
+  if (patch.aadhaarNo !== undefined) {
+    await assertAadhaarFree(trustId, programId, patch.aadhaarNo, { exceptId: memberId });
+  }
 
   const updated = await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);

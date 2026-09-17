@@ -72,13 +72,25 @@ export async function postPayment(scope, input) {
    */
   const groupCodes = await loadGroupCodes(trustId, programId);
 
-  if (!closings.length) {
-    throw badRequest('This program has no closings yet');
+  const requested = [...new Set(input.seqs ?? [])];
+  const joinFeeOnly = !requested.length && Number(input.joinFeeAmount) > 0;
+
+  if (!requested.length && !joinFeeOnly) {
+    throw badRequest('कम से कम एक क्लोजिंग चुनें');
   }
 
-  const requested = [...new Set(input.seqs ?? [])];
-  if (!requested.length && !input.joinFeeAmount) {
-    throw badRequest('Select at least one closing to pay');
+  /**
+   * A receipt for closings needs closings to exist. A JOINING FEE does not.
+   *
+   * This guard used to run before that distinction was made, and it refused
+   * every payment in a programme with no closings — including the joining-fee
+   * receipt that is now written when a member is enrolled with their fee
+   * marked paid. So the very first member of a brand-new योजना could not be
+   * added at all, and the message blamed closings, which the operator had not
+   * mentioned and did not want.
+   */
+  if (!joinFeeOnly && !closings.length) {
+    throw badRequest('इस योजना में अभी कोई क्लोजिंग नहीं है');
   }
 
   // A receipt covering more closings than one transaction can safely write is

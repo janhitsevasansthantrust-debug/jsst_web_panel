@@ -118,6 +118,12 @@ function toIndexEntry(id, c) {
     amount: c.amountPerMember ?? LIMITS.DEFAULT_PAY_AMOUNT,
     groupId: c.groupId ?? null,
     batchId: c.batchId ?? null,
+    /**
+     * Carried because `computeDue` runs against the INDEX, not the closing
+     * documents. A rule that lived only on the document would be invisible to
+     * the one place that decides what anybody owes.
+     */
+    includeBlocked: c.includeBlocked !== false,
     status: c.status ?? CLOSING_STATUS.ACTIVE,
   };
 }
@@ -137,7 +143,7 @@ export async function rebuildClosingsIndex(trustId, programId) {
     .select(
       'seq', 'memberId', 'displayName', 'registrationNumber', 'fatherName',
       'village', 'jati', 'phone', 'closingDateMs', 'amountPerMember',
-      'groupId', 'batchId', 'status',
+      'groupId', 'batchId', 'includeBlocked', 'status',
     )
     .get();
 

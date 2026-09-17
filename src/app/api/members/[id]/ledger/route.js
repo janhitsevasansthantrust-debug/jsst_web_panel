@@ -18,9 +18,15 @@ export const GET = handler(async (request, context) => {
   const { id } = await context.params;
 
   const url = new URL(request.url);
+  /**
+   * 300, not 100. This feeds the member's own account tab, and somebody
+   * asking what they have paid means all of it — a list that silently stops
+   * part-way is one they will dispute at the counter. A member with more
+   * receipts than this has been paying weekly for six years.
+   */
   const receiptLimit = Math.min(
     Number(url.searchParams.get('receipts')) || 20,
-    100,
+    300,
   );
 
   const ledger = await getMemberLedger(scope, id, { receiptLimit });

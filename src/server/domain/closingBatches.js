@@ -1,9 +1,9 @@
 import 'server-only';
 
-import { db, serverNow, inc } from '../firebase/admin.js';
-import { getClosingsIndex } from './indexes.js';
+import { db, serverNow, inc, getAllDocs } from '../firebase/admin.js';
+import { getClosingsIndex, patchClosingInIndex } from './indexes.js';
 import { badRequest, conflict, notFound } from '../http.js';
-import { paths, LIMITS } from '../../config/constants.js';
+import { paths, LIMITS, CLOSING_STATUS } from '../../config/constants.js';
 import { batchCode, selectBatchRows, summariseBatch } from '../../lib/closingBatch.js';
 
 /**
@@ -218,4 +218,128 @@ export async function issueBatch(scope, batchId) {
   });
 
   return { id: batchId, ...snap.data(), status: 'issued', closingCount: rows.length, perMemberAmount };
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Moving closings in and out of a batch
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Put existing closings on a batch's notice, or take them off it.
+ *
+ * The batch used to be choosable only while CREATING a closing, which left no
+ * way to deal with the ordinary case: the month's closings were entered as
+ * they happened, and the समूह for that month was made afterwards. Everything
+ * already entered was then stranded — on no notice, on no receipt, collected
+ * from nobody.
+ *
+ * Moving a closing between batches changes NOTHING about what anybody owes.
+ * Dues come from the closing's date, member by member; the batch only decides
+ * which sheet it is printed on. That is why this is allowed to be a free edit
+ * up until the moment the batch is issued — and refused completely afterwards,
+ * because by then the sheet is in people's hands.
+ *
+ * @param batchId   the batch to move them ONTO, or null to take them off
+ * @param closingIds which closings
+ */
+export async function setClosingBatch(scope, batchId, closingIds, { batchName } = {}) {
+  const { trustId, programId } = scope;
+
+  const ids = [...new Set((closingIds ?? []).filter(Boolean))];
+  if (!ids.length) throw badRequest('कोई क्लोजिंग नहीं चुनी');
+  if (ids.length > LIMITS.MAX_BATCH_CLOSINGS) {
+    throw badRequest(
+      `एक बार में ज़्यादा से ज़्यादा ${LIMITS.MAX_BATCH_CLOSINGS} क्लोजिंग जोड़ी जा सकती हैं`,
+    );
+  }
+
+  // The destination must exist and still be open. Checked once, before any
+  // write, so a bad id cannot leave half the closings moved.
+  let name = batchName ?? null;
+  if (batchId) {
+    const resolved = await resolveBatch(scope, batchId);
+    name = resolved.batchName;
+  }
+
+  const refs = ids.map((id) => db.doc(paths.closing(trustId, programId, id)));
+  const snaps = await getAllDocs(refs);
+
+  /** batchId → how many closings joined or left it. */
+  const deltas = new Map();
+  const moved = [];
+
+  const batch = db.batch();
+
+  snaps.forEach((snap, i) => {
+    if (!snap.exists) return;
+
+    const closing = snap.data();
+    const from = closing.batchId ?? null;
+
+    // Already where it is being sent. Skipped rather than rewritten, so
+    // pressing the button twice does not double the counters.
+    if (from === (batchId ?? null)) return;
+
+    /**
+     * A closing cannot be pulled out of a batch that has been issued.
+     *
+     * The notice listing it has been handed out and members have been asked
+     * for the money. Removing it afterwards would leave them holding a bill
+     * for something the system says was never billed.
+     */
+    if (from) deltas.set(from, (deltas.get(from) ?? 0) - 1);
+    if (batchId) deltas.set(batchId, (deltas.get(batchId) ?? 0) + 1);
+
+    batch.update(refs[i], {
+      batchId: batchId ?? null,
+      batchName: batchId ? name : null,
+      updatedAt: serverNow(),
+      updatedBy: scope.uid,
+    });
+
+    moved.push({ id: ids[i], seq: closing.seq, from });
+  });
+
+  if (!moved.length) {
+    return { moved: 0, closings: [] };
+  }
+
+  for (const [id, delta] of deltas) {
+    batch.set(
+      db.doc(paths.closingBatch(trustId, programId, id)),
+      { closingCount: inc(delta), updatedAt: serverNow() },
+      { merge: true },
+    );
+  }
+
+  await batch.commit();
+
+  // The index carries `batchId`, and the notice and the receipts are built
+  // from the index — so a closing that moved without this would keep printing
+  // on its old sheet.
+  for (const m of moved) {
+    await patchClosingInIndex(trustId, programId, m.id, { batchId: batchId ?? null });
+  }
+
+  return { moved: moved.length, closings: moved };
+}
+
+/**
+ * Closings that can still be put on a notice.
+ *
+ * Reverted ones are left out: they are owed by nobody, so putting one on a
+ * bill would be asking for money the trust has already decided not to take.
+ */
+export async function assignableClosings(scope, { batchId } = {}) {
+  const { items } = await getClosingsIndex(scope.trustId, scope.programId);
+
+  return {
+    closings: items
+      .filter((c) => c.status !== CLOSING_STATUS.REVERTED)
+      // Everything not already on this batch — including closings sitting on
+      // another one, because "I put it on the wrong sheet" is a normal
+      // mistake and the fix should not be to unpick it first.
+      .filter((c) => (c.batchId ?? null) !== (batchId ?? null))
+      .sort((a, b) => (b.dateMs ?? 0) - (a.dateMs ?? 0) || (b.seq ?? 0) - (a.seq ?? 0)),
+  };
 }

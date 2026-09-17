@@ -3,10 +3,11 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Form, Input, InputNumber, Modal, Progress, Row, Segmented, Select, Space, Statistic, Table, Tag, Typography,
+  Alert, App, Button, Card, Checkbox, Col, DatePicker, Descriptions, Drawer, Form, Input, Modal, Progress, Row, Segmented, Select, Space, Statistic, Table, Tag, Typography,
 } from 'antd';
 import {
-  PlusOutlined, ReloadOutlined, UndoOutlined, SearchOutlined,
+  PlusOutlined, ReloadOutlined, UndoOutlined, SearchOutlined, FilePdfOutlined,
+  PrinterOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 
@@ -31,6 +32,9 @@ export default function ClosingsPage() {
   const t = useT();
   const [createOpen, setCreateOpen] = useState(false);
   const [detail, setDetail] = useState(null);
+  // Defaults to this month, which is what the list is asked for nine times out
+  // of ten. An empty range would print every closing the trust has ever made.
+  const [range, setRange] = useState(() => [dayjs().startOf('month'), dayjs()]);
 
   const query = useQuery({
     queryKey: keys.closings,
@@ -75,7 +79,9 @@ export default function ClosingsPage() {
         field: 'status',
         width: 110,
         cellRenderer: (p) =>
-          p.value === 'reverted' ? <Tag color="red">{t('वापस लिया')}</Tag> : <Tag color="blue">{t('चालू')}</Tag>,
+          p.value === 'reverted'
+            ? <Tag color="red">{t('वापस लिया')}</Tag>
+            : <Tag color="blue">{t('चालू')}</Tag>,
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -90,6 +96,32 @@ export default function ClosingsPage() {
         error={query.error}
         extra={
           <>
+            {/* The period the printed सूची covers. Inline rather than behind a
+                dialog, because the date range IS the report — hiding it makes
+                people print the wrong month and only notice on paper. */}
+            <DatePicker.RangePicker
+              value={range}
+              onChange={setRange}
+              format="DD-MM-YYYY"
+              allowEmpty={[true, true]}
+              style={{ width: 250 }}
+            />
+            <Button
+              icon={<FilePdfOutlined />}
+              onClick={() =>
+                window.open(
+                  api.closings.listPdfUrl({
+                    fromMs: range?.[0]?.startOf('day').valueOf(),
+                    // To the END of the closing day — a range typed as "1st to
+                    // 30th" that stopped at midnight would drop the 30th.
+                    toMs: range?.[1]?.endOf('day').valueOf(),
+                  }),
+                  '_blank',
+                )
+              }
+            >
+              {t('सूची छापें')}
+            </Button>
             <Button icon={<ReloadOutlined />} onClick={() => query.refetch()} />
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
               {t('नई क्लोजिंग')}
@@ -125,6 +157,7 @@ function CreateClosingModal({ open, onClose }) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [newBatch, setNewBatch] = useState(null);
+  const [justMade, setJustMade] = useState(null);
 
   const members = useQuery({
     queryKey: keys.closable(search),
@@ -151,6 +184,9 @@ function CreateClosingModal({ open, onClose }) {
       }),
     onSuccess: (res) => {
       message.success(t('क्लोजिंग #{seq} बन गई', { seq: res.closing.seq }));
+      // Everything that follows from this closing, offered here instead of
+      // making the operator go and find three different screens.
+      setJustMade(res.closing);
       queryClient.invalidateQueries({ queryKey: keys.closings });
       queryClient.invalidateQueries({ queryKey: keys.closingBatches });
       queryClient.invalidateQueries({ queryKey: keys.stats });
@@ -180,7 +216,7 @@ function CreateClosingModal({ open, onClose }) {
         message={t('कोई pending row नहीं बनेगी')}
         description={
           <Text style={{ fontSize: 13 }}>
-            {t('पुराने सिस्टम में यहाँ हर सदस्य के लिए एक row बनती थी — 5000 सदस्य यानी 5000 writes। अब सिर्फ़ 5 writes होती हैं। कौन क्या देगा, यह तारीख़ से अपने-आप तय होता है।')}
+            {t('पुराने सिस्टम में यहाँ हर सदस्य के लिए एक row बनती थी — 5000 सदस्य यानी 5000 writes। अब सिर्फ़ 5 writes होती हैं। कौन देगा यह तारीख़ से, और कितना देगा यह हर सदस्य के अपने आयु वर्ग से अपने-आप तय होता है।')}
           </Text>
         }
       />
@@ -189,7 +225,12 @@ function CreateClosingModal({ open, onClose }) {
         form={form}
         layout="vertical"
         onFinish={save.mutate}
-        initialValues={{ closingDate: dayjs(), closingType: 'marriage' }}
+        initialValues={{
+          closingDate: dayjs(),
+          closingType: 'marriage',
+          // What the trust has always done — a block is a warning, not an exit.
+          includeBlocked: true,
+        }}
       >
         <Form.Item
           name="memberId"
@@ -207,10 +248,7 @@ function CreateClosingModal({ open, onClose }) {
               label: `${m.registrationNumber} — ${m.displayName}${m.village ? ` (${m.village})` : ''}`,
               value: m.id,
             }))}
-            onChange={(id) => {
-              const m = (members.data?.members ?? []).find((x) => x.id === id);
-              if (m) form.setFieldValue('amountPerMember', m.payAmount || 200);
-            }}
+
           />
         </Form.Item>
 
@@ -231,10 +269,6 @@ function CreateClosingModal({ open, onClose }) {
             </Form.Item>
           </Col>
         </Row>
-
-        <Form.Item name="amountPerMember" label={t('प्रति सदस्य राशि')}>
-          <InputNumber min={1} prefix="₹" style={{ width: '100%' }} />
-        </Form.Item>
 
         {/* Which sheet this closing goes out on. Optional — a closing with no
             batch is still a perfectly good closing and members still owe it;
@@ -273,10 +307,22 @@ function CreateClosingModal({ open, onClose }) {
           />
         </Form.Item>
 
+        {/* Decided per closing and frozen on it. If it were a global setting,
+            changing it would silently rewrite what every blocked member owes
+            for every closing ever made — including ones they hold receipts
+            for. */}
+        <Form.Item name="includeBlocked" valuePropName="checked">
+          <Checkbox>
+            {t('ब्लॉक / निष्क्रिय सदस्यों पर भी किस्त जोड़ें')}
+          </Checkbox>
+        </Form.Item>
+
         <Form.Item name="notes" label={t('टिप्पणी')}>
           <Input.TextArea rows={2} />
         </Form.Item>
       </Form>
+
+      <AfterClosingModal closing={justMade} onClose={() => setJustMade(null)} />
 
       {/* Created from inside the picker and selected straight away, so an
           operator who realises mid-closing that this month has no batch yet
@@ -362,7 +408,15 @@ function ClosingDetailDrawer({ closing, onClose }) {
             </Col>
             <Col xs={12} md={6}>
               <Card size="small">
-                <Statistic title={t('प्रति सदस्य')} value={inr(c.amountPerMember)} valueStyle={{ fontSize: 20 }} />
+                {/* The AVERAGE, and labelled as one. There is no single
+                    per-member rate — each member pays their own age band's —
+                    so a stat headed "प्रति सदस्य" was a number nobody's
+                    receipt would ever match. */}
+                <Statistic
+                  title={t('औसत प्रति सदस्य')}
+                  value={inr(c.amountPerMember)}
+                  valueStyle={{ fontSize: 20 }}
+                />
               </Card>
             </Col>
           </Row>
@@ -502,6 +556,40 @@ function ClosingDetailDrawer({ closing, onClose }) {
             />
           </Card>
 
+          {/* A red tag was the ONLY sign a closing had been reverted — no
+              date, no reason, no figure for what went back to members. All of
+              it was already stored; none of it was read. */}
+          {c.status === 'reverted' && (
+            <Alert
+              type="error"
+              showIcon
+              message={t('यह क्लोजिंग वापस ली जा चुकी है')}
+              description={
+                <Space direction="vertical" size={2}>
+                  <Text style={{ fontSize: 13 }}>
+                    {t('तिथि')}:{' '}
+                    {c.revertedAtMs
+                      ? new Date(c.revertedAtMs).toLocaleString('hi-IN')
+                      : '—'}
+                  </Text>
+                  <Text style={{ fontSize: 13 }}>
+                    {t('कारण')}: {c.revertReason || t('कोई कारण नहीं लिखा गया')}
+                  </Text>
+                  <Text style={{ fontSize: 13 }}>
+                    {t('{n} रसीदें पलटी गईं, {amt} सदस्यों के खाते में वापस', {
+                      n: c.revertedPayerCount ?? 0,
+                      amt: inr(c.revertedAmount ?? 0),
+                    })}
+                  </Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    {t('इस क्लोजिंग की किस्त अब किसी सदस्य पर बकाया नहीं है। रिकॉर्ड इसलिए रखा गया है कि इसका क्रमांक दोबारा किसी को न मिले।')}
+                  </Text>
+                </Space>
+              }
+              style={{ marginBottom: 12 }}
+            />
+          )}
+
           <Descriptions size="small" bordered column={{ xs: 1, md: 2 }}>
             <Descriptions.Item label={t('रजि. नंबर')}>{c.regNo}</Descriptions.Item>
             <Descriptions.Item label={t('तिथि')}>
@@ -592,6 +680,69 @@ function RevertModal({ closing, open, onClose, onDone }) {
           />
         </Form.Item>
       </Form>
+    </Modal>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * What happens next, offered at the moment the closing is made.
+ *
+ * The three documents a closing leads to — the month's notice, everybody's
+ * receipt, the agent summary — used to live on a different card, reachable
+ * only after closing the form and finding the batch. That is three screens
+ * for one job, and the job is done standing at a counter.
+ *
+ * If the closing went onto no batch, this says so and offers the fix, because
+ * a closing on no notice is one nobody will be billed for on paper.
+ */
+function AfterClosingModal({ closing, onClose }) {
+  const t = useT();
+  const open = Boolean(closing);
+  const batchId = closing?.batchId ?? null;
+
+  return (
+    <Modal
+      title={t('क्लोजिंग #{seq} बन गई', { seq: closing?.seq ?? '' })}
+      open={open}
+      onCancel={onClose}
+      footer={<Button onClick={onClose}>{t('बंद करें')}</Button>}
+      width={520}
+      destroyOnHidden
+    >
+      <Paragraph type="secondary" style={{ fontSize: 13 }}>
+        {t('किस सदस्य पर कितना बकाया जुड़ा, यह तारीख़ और उसके आयु वर्ग से अपने-आप तय हो गया है। अब छपाई बाकी है।')}
+      </Paragraph>
+
+      {!batchId ? (
+        <Alert
+          type="warning"
+          showIcon
+          message={t('यह क्लोजिंग किसी समूह में नहीं है')}
+          description={t('समूह में डाले बिना यह किसी सूचना या रसीद पर नहीं छपेगी। नीचे क्लोजिंग समूह कार्ड में ⊞ बटन से जोड़ दीजिए।')}
+        />
+      ) : (
+        <Space direction="vertical" style={{ width: '100%' }} size={8}>
+          <Button
+            block
+            icon={<PrinterOutlined />}
+            onClick={() => window.open(api.closingBatches.noticeUrl(batchId), '_blank')}
+          >
+            {t('समूह की सूचना छापें')}
+          </Button>
+          <Button
+            block
+            icon={<FilePdfOutlined />}
+            onClick={() => window.open(api.closingBatches.summaryUrl(batchId), '_blank')}
+          >
+            {t('एजेंट-वार सारांश छापें')}
+          </Button>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {t('हर सदस्य की अलग रसीद के लिए नीचे समूह कार्ड में एजेंट चुनकर 📄 दबाएँ — एक सदस्य = एक पन्ना।')}
+          </Text>
+        </Space>
+      )}
     </Modal>
   );
 }

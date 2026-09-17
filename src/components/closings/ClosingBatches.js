@@ -3,11 +3,12 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  App, Button, Card, Col, DatePicker, Empty, Form, Input, Modal, Row, Space,
-  Table, Tag, Tooltip, Typography,
+  App, Button, Card, Col, DatePicker, Empty, Form, Input, Modal, Row, Select,
+  Space, Table, Tag, Tooltip, Typography,
 } from 'antd';
 import {
   PlusOutlined, PrinterOutlined, LockOutlined, EditOutlined,
+  FileTextOutlined, ProfileOutlined, AppstoreAddOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 
@@ -33,10 +34,27 @@ export default function ClosingBatches() {
   const { message, modal } = App.useApp();
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(null);
+  /**
+   * Whose round to print.
+   *
+   * Empty means the whole trust, which is the right default for the summary
+   * (the office wants every agent on one page) and the wrong one for receipts
+   * (that is a book). The receipts button says so rather than silently
+   * printing four hundred pages.
+   */
+  const [agentId, setAgentId] = useState(null);
+  /** The batch whose closings are being picked. */
+  const [picking, setPicking] = useState(null);
 
   const query = useQuery({
     queryKey: keys.closingBatches,
     queryFn: () => api.closingBatches.list(),
+  });
+
+  const agents = useQuery({
+    queryKey: keys.agents,
+    queryFn: () => api.agents.list(),
+    select: (d) => d.agents ?? [],
   });
 
   const issue = useMutation({
@@ -68,9 +86,26 @@ export default function ClosingBatches() {
         size="small"
         title={t('क्लोजिंग समूह')}
         extra={
-          <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setEditing({})}>
-            {t('नया समूह')}
-          </Button>
+          <Space size={6}>
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              size="small"
+              value={agentId}
+              onChange={setAgentId}
+              placeholder={t('सभी एजेंट')}
+              style={{ minWidth: 170 }}
+              loading={agents.isLoading}
+              options={(agents.data ?? []).map((a) => ({
+                label: a.displayName || a.email,
+                value: a.id,
+              }))}
+            />
+            <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setEditing({})}>
+              {t('नया समूह')}
+            </Button>
+          </Space>
         }
         style={{ marginBottom: 16 }}
       >
@@ -123,7 +158,7 @@ export default function ClosingBatches() {
               { title: t('अंतिम तिथि'), dataIndex: 'dueDate', width: 110 },
               {
                 title: '',
-                width: 120,
+                width: 190,
                 align: 'right',
                 render: (_, b) => (
                   <Space size={4}>
@@ -133,6 +168,46 @@ export default function ClosingBatches() {
                         icon={<PrinterOutlined />}
                         disabled={!b.closingCount}
                         onClick={() => window.open(api.closingBatches.noticeUrl(b.id), '_blank')}
+                      />
+                    </Tooltip>
+                    <Tooltip
+                      title={
+                        agentId
+                          ? t('इस एजेंट के सदस्यों की रसीदें छापें')
+                          : t('रसीदों के लिए पहले एजेंट चुनें')
+                      }
+                    >
+                      <Button
+                        size="small"
+                        icon={<FileTextOutlined />}
+                        disabled={!b.closingCount || !agentId}
+                        onClick={() =>
+                          window.open(api.closingBatches.receiptsUrl(b.id, agentId), '_blank')
+                        }
+                      />
+                    </Tooltip>
+                    <Tooltip title={t('एजेंट-वार सारांश छापें')}>
+                      <Button
+                        size="small"
+                        icon={<ProfileOutlined />}
+                        disabled={!b.closingCount}
+                        onClick={() =>
+                          window.open(api.closingBatches.summaryUrl(b.id, agentId), '_blank')
+                        }
+                      />
+                    </Tooltip>
+                    <Tooltip
+                      title={
+                        b.status === 'issued'
+                          ? t('जारी समूह में क्लोजिंग नहीं जोड़ी जा सकती')
+                          : t('क्लोजिंग जोड़ें या हटाएँ')
+                      }
+                    >
+                      <Button
+                        size="small"
+                        icon={<AppstoreAddOutlined />}
+                        disabled={b.status === 'issued'}
+                        onClick={() => setPicking(b)}
                       />
                     </Tooltip>
                     <Tooltip title={t('संपादित करें')}>
@@ -156,6 +231,7 @@ export default function ClosingBatches() {
       </Card>
 
       <BatchFormModal batch={editing} onClose={() => setEditing(null)} />
+      <PickClosingsModal batch={picking} onClose={() => setPicking(null)} />
     </>
   );
 }
@@ -284,5 +360,164 @@ function InvitationCard({ value, onChange }) {
       width={160}
       height={110}
     />
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Put existing closings on a batch's notice.
+ *
+ * Shows both sides at once — what is already on this notice and what is not —
+ * because the question being answered is "is the sheet right yet", and that is
+ * not answerable from half the list.
+ *
+ * Moving a closing changes nothing about what anybody owes; dues come from the
+ * closing's date, member by member. The batch only decides which sheet it
+ * prints on. Worth saying on the screen, because people are careful with
+ * anything that looks like it moves money.
+ */
+function PickClosingsModal({ batch, onClose }) {
+  const t = useT();
+  const { message } = App.useApp();
+  const queryClient = useQueryClient();
+  const open = Boolean(batch);
+
+  const [selected, setSelected] = useState([]);
+
+  const sheet = useQuery({
+    queryKey: keys.closingBatch(batch?.id),
+    queryFn: () => api.closingBatches.get(batch.id),
+    enabled: open,
+  });
+
+  const available = useQuery({
+    queryKey: ['closing-batch', batch?.id, 'assignable'],
+    queryFn: () => api.closingBatches.assignable(batch.id),
+    enabled: open,
+    select: (d) => d.closings ?? [],
+  });
+
+  function done(res) {
+    message.success(t('{n} क्लोजिंग बदली गईं', { n: res.moved }));
+    setSelected([]);
+    queryClient.invalidateQueries({ queryKey: keys.closingBatches });
+    queryClient.invalidateQueries({ queryKey: keys.closings });
+    sheet.refetch();
+    available.refetch();
+  }
+
+  const add = useMutation({
+    mutationFn: (ids) => api.closingBatches.addClosings(batch.id, ids),
+    onSuccess: done,
+    onError: (err) => message.error(err.message),
+  });
+
+  const drop = useMutation({
+    mutationFn: (ids) => api.closingBatches.removeClosings(batch.id, ids),
+    onSuccess: done,
+    onError: (err) => message.error(err.message),
+  });
+
+  const columns = [
+    { title: t('क्रम'), dataIndex: 'seq', width: 64 },
+    {
+      title: t('नाम'),
+      dataIndex: 'name',
+      render: (v, c) => (
+        <span>
+          {v}
+          {c.fatherName ? <Text type="secondary"> / {c.fatherName}</Text> : null}
+        </span>
+      ),
+    },
+    { title: t('रजि.'), dataIndex: 'regNo', width: 90 },
+    {
+      title: t('तिथि'),
+      dataIndex: 'dateMs',
+      width: 110,
+      render: (v) => (v ? dayjs(v).format('DD-MM-YYYY') : '—'),
+    },
+  ];
+
+  return (
+    <Modal
+      title={t('क्लोजिंग जोड़ें — {name}', { name: batch?.name ?? '' })}
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      width={760}
+      destroyOnHidden
+      afterClose={() => setSelected([])}
+    >
+      <Paragraph type="secondary" style={{ fontSize: 12 }}>
+        {t('समूह बदलने से किसी का बकाया नहीं बदलता — वह क्लोजिंग की तारीख़ से तय होता है। समूह सिर्फ़ यह तय करता है कि किस सूचना पर छपेगी।')}
+      </Paragraph>
+
+      <Card size="small" title={t('इस समूह में')} style={{ marginBottom: 12 }}>
+        <Table
+          rowKey="id"
+          size="small"
+          loading={sheet.isLoading}
+          dataSource={sheet.data?.rows ?? []}
+          columns={columns}
+          pagination={false}
+          scroll={{ y: 180 }}
+          locale={{ emptyText: t('अभी कोई क्लोजिंग नहीं') }}
+          rowSelection={{
+            selectedRowKeys: selected,
+            onChange: setSelected,
+          }}
+        />
+        <Button
+          danger
+          size="small"
+          style={{ marginTop: 8 }}
+          disabled={!selected.length}
+          loading={drop.isPending}
+          onClick={() => drop.mutate(selected)}
+        >
+          {t('चुनी हुई हटाएँ')}
+        </Button>
+      </Card>
+
+      <Card size="small" title={t('जोड़ी जा सकती हैं')}>
+        <Table
+          rowKey="id"
+          size="small"
+          loading={available.isLoading}
+          dataSource={available.data ?? []}
+          columns={[
+            ...columns,
+            {
+              title: t('समूह'),
+              dataIndex: 'batchId',
+              width: 90,
+              // A closing already on ANOTHER notice can still be moved — "I put
+              // it on the wrong sheet" is a normal mistake — but the operator
+              // must be able to see that is what they are doing.
+              render: (v) => (v ? <Tag color="gold">{t('दूसरे समूह में')}</Tag> : null),
+            },
+          ]}
+          pagination={{ pageSize: 8, size: 'small' }}
+          scroll={{ y: 220 }}
+          locale={{ emptyText: t('जोड़ने के लिए कोई क्लोजिंग नहीं') }}
+          rowSelection={{
+            selectedRowKeys: selected,
+            onChange: setSelected,
+          }}
+        />
+        <Button
+          type="primary"
+          size="small"
+          style={{ marginTop: 8 }}
+          disabled={!selected.length}
+          loading={add.isPending}
+          onClick={() => add.mutate(selected)}
+        >
+          {t('चुनी हुई जोड़ें')}
+        </Button>
+      </Card>
+    </Modal>
   );
 }

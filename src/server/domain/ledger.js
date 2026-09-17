@@ -32,7 +32,7 @@
  * seq — so back-dating a closing can never corrupt an existing ledger.
  */
 
-import { LIMITS } from '../../config/constants.js';
+import { LIMITS, MEMBER_STATUS } from '../../config/constants.js';
 
 /* ══════════════════════════════════════════════════════════════════════════
    Normalisation
@@ -103,6 +103,22 @@ export function isEligible(member, closing) {
 
   const memberId = member.id ?? member.memberId;
   if (memberId && closing.memberId && memberId === closing.memberId) return false;
+
+  /**
+   * Whether a blocked member is billed is the CLOSING's decision, taken when
+   * it was created and stored on it — not a setting that can be changed later.
+   *
+   * That matters: if it were a live setting, flipping it would silently
+   * rewrite what every blocked member owes for every closing already made,
+   * including ones they have receipts for. Freezing it per closing means a
+   * closing bills exactly whom it was created to bill, forever.
+   *
+   * Absent means true, so every closing made before this existed keeps
+   * behaving exactly as it did.
+   */
+  if (closing.includeBlocked === false && member.status === MEMBER_STATUS.BLOCKED) {
+    return false;
+  }
 
   const exitMs = member.exitDateMs;
   if (exitMs != null && Number.isFinite(Number(exitMs))) {
