@@ -202,6 +202,15 @@ export const LIMITS = {
   MAX_TX_WRITES: 450,
   /** Max closings on one receipt before it is split into linked receipts. */
   MAX_RECEIPT_ITEMS: 400,
+  /**
+   * Members in one bulk collection.
+   *
+   * Each one is its own transaction and its own receipt, so this bounds how
+   * long a single request can run — an agent's round is tens of members, not
+   * thousands, and a cap that is reached is a clearer failure than a request
+   * that times out halfway through writing receipts.
+   */
+  BULK_MEMBERS: 200,
   /** Entries per closings-index document before it shards. */
   CLOSINGS_INDEX_CHUNK: 1000,
   /**

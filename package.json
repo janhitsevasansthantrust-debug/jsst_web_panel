@@ -11,9 +11,6 @@
     "test:watch": "node --test --watch \"src/**/*.test.js\"",
     "create-owner": "node --conditions=react-server --env-file=.env.local scripts/create-owner.js",
     "whoami": "node --conditions=react-server --env-file=.env.local scripts/whoami.js",
-    "migrate:export": "node scripts/migrate/01-export.js",
-    "migrate:import": "node scripts/migrate/02-import.js",
-    "migrate:verify": "node scripts/migrate/03-verify.js",
     "reindex": "node --conditions=react-server --env-file=.env.local scripts/reindex.js",
     "rules:fetch": "node --conditions=react-server --env-file=.env.local scripts/fetch-live-rules.js",
     "check": "node scripts/check-imports.js",
@@ -23,7 +20,8 @@
     "deploy:all": "node --env-file=.env.local scripts/deploy.js all",
     "migrate:flatten": "node --conditions=react-server --env-file=.env.local scripts/migrate-members-flat.js",
     "i18n:extract": "node scripts/extract-strings.js",
-    "backfill:keywords": "node --conditions=react-server --env-file=.env.local scripts/backfill-keywords.js"
+    "backfill:keywords": "node --conditions=react-server --env-file=.env.local scripts/backfill-keywords.js",
+    "migrate": "node --conditions=react-server --env-file=.env.local scripts/migrate-old.js"
   },
   "dependencies": {
     "@ant-design/icons": "^6.1.0",

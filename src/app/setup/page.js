@@ -215,7 +215,7 @@ export default function SetupPage() {
           <Form.Item name="payAmount" label="प्रति क्लोजिंग राशि" style={{ flex: 1 }}>
             <InputNumber min={1} prefix="₹" style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item name="joinFees" label="जॉइनिंग फीस" style={{ flex: 1 }}>
+          <Form.Item name="joinFees" label="नामांकन शुल्क" style={{ flex: 1 }}>
             <InputNumber min={0} prefix="₹" style={{ width: '100%' }} />
           </Form.Item>
         </Space>

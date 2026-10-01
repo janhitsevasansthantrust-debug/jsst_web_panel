@@ -116,7 +116,7 @@ export function ReceiptPdf({ trust, receipt, member, copies = ['सदस्य 
               <View style={s.totalsLeft}>
                 {receipt.joinFeeAmount > 0 && (
                   <Text style={s.totalLine}>
-                    जॉइनिंग फीस: {inr(receipt.joinFeeAmount)}
+                    नामांकन शुल्क: {inr(receipt.joinFeeAmount)}
                   </Text>
                 )}
                 <Text style={s.totalLine}>

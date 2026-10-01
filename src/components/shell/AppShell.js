@@ -6,7 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { Layout, Menu, Avatar, Dropdown, Typography, Grid, Button, Space, Tag, Drawer } from 'antd';
 import {
-  DashboardOutlined, TeamOutlined, HeartOutlined, WalletOutlined,
+  DashboardOutlined, TeamOutlined, HeartOutlined, WalletOutlined, GroupOutlined,
   UserSwitchOutlined, PercentageOutlined, ProjectOutlined, FileTextOutlined,
   SettingOutlined, LogoutOutlined, MenuOutlined, DatabaseOutlined,
 } from '@ant-design/icons';
@@ -34,6 +34,7 @@ const NAV = [
   { key: '/members', icon: <TeamOutlined />, label: 'सदस्य', min: ROLE.AGENT },
   { key: '/closings', icon: <HeartOutlined />, label: 'क्लोजिंग', min: ROLE.AGENT },
   { key: '/collect', icon: <WalletOutlined />, label: 'भुगतान लें', min: ROLE.AGENT },
+  { key: '/bulk-collect', icon: <GroupOutlined />, label: 'सामूहिक वसूली', min: ROLE.AGENT },
   { key: '/agents', icon: <UserSwitchOutlined />, label: 'एजेंट', min: ROLE.ADMIN },
   { key: '/yojna', icon: <ProjectOutlined />, label: 'योजना', min: ROLE.ADMIN },
   { key: '/commission', icon: <PercentageOutlined />, label: 'कमीशन', min: ROLE.AGENT },

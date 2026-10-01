@@ -36,9 +36,32 @@ export const EXPORT_COLUMNS = [
   { key: 'payAmount', header: 'प्रति क्लोजिंग', width: 10, numeric: true },
   { key: 'dueCount', header: 'बकाया क्लोजिंग', width: 10, numeric: true },
   { key: 'dueAmount', header: 'बकाया राशि', width: 11, numeric: true },
-  { key: 'paidAmount', header: 'जमा राशि', width: 11, numeric: true },
-  { key: 'joinFees', header: 'जॉइनिंग फीस', width: 10, numeric: true },
-  { key: 'joinFeesDone', header: 'फीस जमा', width: 8, map: (v) => (v ? 'हाँ' : 'नहीं') },
+  /**
+   * `paidAmount` counts closings and nothing else — that is what the ledger
+   * moves. It is NOT what the member has paid in total, and labelling it
+   * "जमा राशि" said it was: a member who handed over ₹2,100 of their joining
+   * fee and owed no closing read as having paid zero.
+   */
+  { key: 'paidAmount', header: 'क्लोजिंग जमा', width: 11, numeric: true },
+  { key: 'joinFees', header: 'नामांकन शुल्क', width: 10, numeric: true },
+  /**
+   * Paid and outstanding, not just a yes/no.
+   *
+   * "फीस जमा: नहीं" is the same answer for a member who has paid nothing and
+   * one who has ₹400 left of ₹11,000, and those are not the same member. The
+   * whole point of a file is that somebody works out who to chase from it.
+   */
+  { key: 'joinFeesPaid', header: 'शुल्क जमा', width: 11, numeric: true },
+  { key: 'joinFeesDue', header: 'शुल्क बाकी', width: 10, numeric: true },
+  { key: 'joinFeesDone', header: 'शुल्क पूरा', width: 8, map: (v) => (v ? 'हाँ' : 'नहीं') },
+  /** Everything this member has actually handed over: closings plus fee. */
+  {
+    key: 'totalPaid',
+    header: 'कुल जमा',
+    width: 11,
+    numeric: true,
+    value: (m) => round2((Number(m.paidAmount) || 0) + (Number(m.joinFeesPaid) || 0)),
+  },
   { key: 'aadhaarNo', header: 'आधार नंबर', width: 14 },
 ];
 
@@ -51,7 +74,17 @@ function isoDate(ms) {
   return `${p(d.getDate())}-${p(d.getMonth() + 1)}-${d.getFullYear()}`;
 }
 
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+/**
+ * One cell.
+ *
+ * `value` is for columns that are not a field at all but a sum of two —
+ * computed here rather than written onto every member, so there is no third
+ * number to drift out of step with the two it came from.
+ */
 export function cellValue(member, col) {
+  if (col.value) return col.value(member);
   const raw = member[col.key];
   return col.map ? col.map(raw) : (raw ?? '');
 }

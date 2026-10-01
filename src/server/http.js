@@ -59,21 +59,42 @@ export function okCached(data, seconds = 60, init = {}) {
   );
 }
 
+/**
+ * In development the real error goes to the browser as well as the console.
+ *
+ * `Something went wrong on the server` is the correct thing to tell a member
+ * standing at a counter and a useless thing to tell the person building this:
+ * it turns every fault into a guessing game, because the only copy of what
+ * actually happened is a line in a terminal nobody was watching. Production
+ * still says nothing — a stack trace names file paths, package versions and
+ * sometimes the shape of the data, and none of that belongs in a response.
+ */
+const DEV = process.env.NODE_ENV !== 'production';
+
 export function fail(error) {
   const isApp = error instanceof AppError;
   const status = isApp ? error.status : 500;
 
   if (!isApp) {
-    // Never leak an internal stack trace to the browser.
+    // Never leak an internal stack trace to the browser — except in dev, below.
     console.error('[api] unhandled', error);
   }
 
   return NextResponse.json(
     {
       ok: false,
-      error: isApp ? error.message : 'Something went wrong on the server',
+      error: isApp
+        ? error.message
+        : DEV
+          ? `${error.name ?? 'Error'}: ${error.message}`
+          : 'Something went wrong on the server',
       code: isApp ? error.code : 'internal_error',
       ...(isApp && error.details ? { details: error.details } : {}),
+      // The first few frames are enough to find the line; the rest is Next.js
+      // internals and would bury the one frame that matters.
+      ...(!isApp && DEV
+        ? { stack: String(error.stack ?? '').split('\n').slice(0, 8) }
+        : {}),
     },
     { status },
   );
@@ -108,7 +129,7 @@ function logRequest(request, status, started, error) {
   } catch {
     /* ignore */
   }
-  const tail = error ? ` — ${error.message}` : '';
+  const tail = error ? ` — ${error.name ?? 'Error'}: ${error.message}` : '';
   console.log(`[api] ${method} ${path} → ${status} in ${ms}ms${tail}`);
 }
 

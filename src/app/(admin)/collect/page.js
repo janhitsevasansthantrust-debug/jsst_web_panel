@@ -1,10 +1,11 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Alert, Button, Card, Col, DatePicker, Empty, Input, Result, Row, Select,
-  Space, Statistic, Table, Tag, App, Typography, Descriptions, Divider,
+  Alert, Button, Card, Checkbox, Col, DatePicker, Empty, Input, InputNumber,
+  Result, Row, Select, Space, Statistic, Table, Tag, App, Typography,
+  Descriptions, Divider,
 } from 'antd';
 import { SearchOutlined, WalletOutlined, PrinterOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -14,6 +15,7 @@ import { inr } from '../../../components/ui/DataGrid.js';
 import { api, keys, newIdempotencyKey } from '../../../lib/api.js';
 import { useMasters } from '../../../lib/useMasters.js';
 import { useMemberSearch } from '../../../lib/useMemberSearch.js';
+import { joinFeesState } from '../../../lib/joinFees.js';
 import { useT } from '../../../i18n/index.js';
 
 const { Text, Title, Paragraph } = Typography;
@@ -45,6 +47,17 @@ export default function CollectPage() {
   const [reference, setReference] = useState('');
   const [note, setNote] = useState('');
   const [receipt, setReceipt] = useState(null);
+
+  /**
+   * The joining fee, when part of it is still outstanding.
+   *
+   * It was only ever collectable at the moment of enrolment: tick the box on
+   * the member form or never. So a member who put down ₹2,100 of ₹11,000 had
+   * no screen anywhere that would take the other ₹8,900. It belongs here, on
+   * the counter screen, beside everything else they owe.
+   */
+  const [takeFee, setTakeFee] = useState(false);
+  const [feeNow, setFeeNow] = useState(0);
 
   /**
    * The member list, searched in the browser.
@@ -89,6 +102,17 @@ export default function CollectPage() {
   const due = ledger.data?.due?.items ?? [];
   const member = ledger.data?.member;
 
+  const fees = useMemo(() => joinFeesState(member ?? {}), [member]);
+
+  // A different member has a different fee — never carry the last one's
+  // figure over to them.
+  useEffect(() => {
+    setTakeFee(false);
+    setFeeNow(0);
+  }, [memberId]);
+
+  const feeAmount = takeFee ? Math.min(Number(feeNow) || 0, fees.due) : 0;
+
   const selectedTotal = useMemo(
     () =>
       due
@@ -97,12 +121,15 @@ export default function CollectPage() {
     [due, selected],
   );
 
+  const grandTotal = selectedTotal + feeAmount;
+
   const pay = useMutation({
     mutationFn: () =>
       api.payments.create(
         {
           memberId,
           seqs: selected,
+          ...(feeAmount > 0 ? { joinFeeAmount: feeAmount } : {}),
           method,
           paidAtMs: paidAt.valueOf(),
           reference,
@@ -113,6 +140,8 @@ export default function CollectPage() {
     onSuccess: (res) => {
       setReceipt(res);
       setSelected([]);
+      setTakeFee(false);
+      setFeeNow(0);
       message.success(t('रसीद {no} बन गई', { no: res.receipt.receiptNo }));
       queryClient.invalidateQueries({ queryKey: keys.memberLedger(memberId) });
       queryClient.invalidateQueries({ queryKey: keys.stats });
@@ -128,6 +157,8 @@ export default function CollectPage() {
     setSelected([]);
     setReference('');
     setNote('');
+    setTakeFee(false);
+    setFeeNow(0);
   }
 
   /* ── Receipt view ──────────────────────────────────────────────────────── */
@@ -164,6 +195,11 @@ export default function CollectPage() {
             <Descriptions.Item label={t('सदस्य')}>{r.memberSnapshot.name}</Descriptions.Item>
             <Descriptions.Item label={t('रजि. नंबर')}>{r.memberSnapshot.regNo}</Descriptions.Item>
             <Descriptions.Item label={t('क्लोजिंग')}>{r.itemCount}</Descriptions.Item>
+            {r.joinFeeAmount > 0 && (
+              <Descriptions.Item label={t('नामांकन शुल्क')}>
+                {inr(r.joinFeeAmount)}
+              </Descriptions.Item>
+            )}
             <Descriptions.Item label={t('राशि')}>{inr(r.totalAmount)}</Descriptions.Item>
             <Descriptions.Item label={t('तरीका')}>{r.method}</Descriptions.Item>
             <Descriptions.Item label={t('तिथि')}>
@@ -381,6 +417,68 @@ export default function CollectPage() {
                 )}
               </Card>
 
+              {fees.due > 0 && (
+                <Card
+                  size="small"
+                  title={
+                    <Space>
+                      {t('नामांकन शुल्क')}
+                      <Tag color={fees.partial ? 'orange' : 'red'}>
+                        {fees.partial ? t('आंशिक जमा') : t('बाकी')}
+                      </Tag>
+                    </Space>
+                  }
+                >
+                  <Row gutter={12} align="middle">
+                    <Col xs={8} md={5}>
+                      <Statistic
+                        title={t('कुल शुल्क')}
+                        value={inr(fees.total)}
+                        valueStyle={{ fontSize: 18 }}
+                      />
+                    </Col>
+                    <Col xs={8} md={5}>
+                      <Statistic
+                        title={t('अब तक जमा')}
+                        value={inr(fees.paid)}
+                        valueStyle={{ fontSize: 18, color: 'var(--paid)' }}
+                      />
+                    </Col>
+                    <Col xs={8} md={5}>
+                      <Statistic
+                        title={t('बाकी')}
+                        value={inr(fees.due)}
+                        valueStyle={{ fontSize: 18, color: 'var(--due)' }}
+                      />
+                    </Col>
+                    <Col xs={24} md={9}>
+                      <Checkbox
+                        checked={takeFee}
+                        onChange={(e) => {
+                          setTakeFee(e.target.checked);
+                          // Default to clearing it — the common case — but
+                          // leave it editable for another part payment.
+                          setFeeNow(e.target.checked ? fees.due : 0);
+                        }}
+                      >
+                        {t('इस रसीद में शुल्क भी लें')}
+                      </Checkbox>
+
+                      {takeFee && (
+                        <InputNumber
+                          min={0}
+                          max={fees.due}
+                          value={feeNow}
+                          onChange={(v) => setFeeNow(v ?? 0)}
+                          prefix="₹"
+                          style={{ width: '100%', marginTop: 8 }}
+                        />
+                      )}
+                    </Col>
+                  </Row>
+                </Card>
+              )}
+
               <Card size="small" title={t('भुगतान विवरण')}>
                 <Row gutter={12}>
                   <Col xs={12} md={6}>
@@ -426,8 +524,15 @@ export default function CollectPage() {
                 <Row align="middle" justify="space-between">
                   <Col>
                     <Statistic
-                      title={t('{n} क्लोजिंग चुनी', { n: selected.length })}
-                      value={inr(selectedTotal)}
+                      title={
+                        feeAmount > 0
+                          ? t('{n} क्लोजिंग + नामांकन शुल्क {f}', {
+                              n: selected.length,
+                              f: inr(feeAmount),
+                            })
+                          : t('{n} क्लोजिंग चुनी', { n: selected.length })
+                      }
+                      value={inr(grandTotal)}
                       valueStyle={{ fontSize: 26, color: 'var(--paid)' }}
                     />
                   </Col>
@@ -437,7 +542,7 @@ export default function CollectPage() {
                       size="large"
                       icon={<WalletOutlined />}
                       loading={pay.isPending}
-                      disabled={!selected.length}
+                      disabled={!selected.length && feeAmount <= 0}
                       onClick={() => pay.mutate()}
                     >
                       {t('रसीद बनाएँ')}

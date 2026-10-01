@@ -129,7 +129,7 @@ export default function DashboardPage() {
               color="var(--paid)"
               label={t('कुल जमा')}
               value={inr(money.collectedTotal)}
-              hint={t('जॉइनिंग फीस {amt}', { amt: inr(money.joinFeesTotal) })}
+              hint={t('नामांकन शुल्क {amt}', { amt: inr(money.joinFeesTotal) })}
             />
           </Col>
 

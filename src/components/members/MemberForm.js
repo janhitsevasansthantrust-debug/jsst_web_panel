@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Alert, App, AutoComplete, Button, Card, Checkbox, Col, DatePicker, Divider, Drawer, Empty, Form, Input, Radio, Row, Select, Space, Spin, Statistic, Tag, Typography,
+  Alert, App, AutoComplete, Button, Card, Checkbox, Col, DatePicker, Divider, Drawer, Empty, Form, Input, InputNumber, Radio, Row, Select, Space, Spin, Statistic, Tag, Typography,
 } from 'antd';
 import {
   DeleteOutlined, PlusOutlined, UserOutlined, PhoneOutlined, HomeOutlined,
@@ -104,6 +104,7 @@ export default function MemberForm({ open, onClose, member }) {
   const bobDate = Form.useWatch('bobDate', form);
   const joinDate = Form.useWatch('joinDate', form);
   const joinFeesDone = Form.useWatch('joinFeesDone', form);
+  const joinFeesPaidNow = Form.useWatch('joinFeesPaidNow', form);
 
   const lookup = useQuery({
     queryKey: keys.memberByPhone(copyPhone),
@@ -161,6 +162,20 @@ export default function MemberForm({ open, onClose, member }) {
     );
   }, [program, bobDate, joinDate]);
 
+  /**
+   * The fee defaults to the whole amount, and the band decides what that is.
+   *
+   * Moving the birth date can change the band — and so the fee — while the box
+   * is already ticked, so the default follows it. Only while the field is
+   * untouched: once somebody has typed ₹2,100 it is theirs, and a date
+   * correction must not quietly put it back to ₹11,000.
+   */
+  useEffect(() => {
+    if (!open || editing || !joinFeesDone || !matched) return;
+    if (form.isFieldTouched('joinFeesPaidNow')) return;
+    form.setFieldValue('joinFeesPaidNow', matched.joinFee);
+  }, [open, editing, joinFeesDone, matched, form]);
+
   useEffect(() => {
     if (!open) return;
     setFiles({});
@@ -184,6 +199,7 @@ export default function MemberForm({ open, onClose, member }) {
         status: MEMBER_STATUS.ACCEPTED,
         addedBy: 'admin',
         joinFeesDone: false,
+        joinFeesPaidNow: undefined,
         joinFeesMethod: 'cash',
         extraDetails: [],
       });
@@ -814,16 +830,61 @@ export default function MemberForm({ open, onClose, member }) {
         {/* ── नामांकन शुल्क ─────────────────────────────────────────────── */}
         <Divider orientation="left">{t('नामांकन शुल्क')}</Divider>
 
-        <Row gutter={16}>
+<Row gutter={16}>
           <Col xs={24} md={8}>
             <Form.Item name="joinFeesDone" valuePropName="checked">
-              <Checkbox>{t('नामांकन शुल्क जमा हो गया')}</Checkbox>
+              <Checkbox>{t('नामांकन शुल्क अभी जमा हो रहा है')}</Checkbox>
             </Form.Item>
           </Col>
+
           {joinFeesDone && (
             <>
+              {/*
+                The fee does not have to arrive in one piece.
+                A band may charge ₹11,000 while the member puts down ₹2,100 at
+                the desk. Only what is actually handed over is receipted; the
+                rest stays outstanding on the member and is collected later
+                from the भुगतान लें screen.
+              */}
               <Col xs={12} md={8}>
-                {/* Marking the fee paid writes a real receipt, so it needs a
+                <Form.Item
+                  name="joinFeesPaidNow"
+                  label={t('अभी कितना जमा')}
+                  rules={[
+                    { required: true, message: t('राशि डालें') },
+                    {
+                      validator: (_, v) =>
+                        v > 0 ? Promise.resolve() : Promise.reject(new Error(t('राशि 0 से ज़्यादा हो'))),
+                    },
+                    {
+                      validator: (_, v) =>
+                        !matched || !(v > matched.joinFee)
+                          ? Promise.resolve()
+                          : Promise.reject(
+                              new Error(t('शुल्क ₹{n} से ज़्यादा नहीं', { n: matched.joinFee })),
+                            ),
+                    },
+                  ]}
+                  extra={
+                    matched
+                      ? joinFeesPaidNow > 0 && joinFeesPaidNow < matched.joinFee
+                        ? t('₹{n} बाकी रहेगा', { n: matched.joinFee - joinFeesPaidNow })
+                        : t('पूरा शुल्क ₹{n}', { n: matched.joinFee })
+                      : undefined
+                  }
+                >
+                  <InputNumber
+                    min={0}
+                    max={matched?.joinFee}
+                    prefix="₹"
+                    style={{ width: '100%' }}
+                    placeholder={matched ? String(matched.joinFee) : ''}
+                  />
+                </Form.Item>
+              </Col>
+
+              <Col xs={12} md={8}>
+                {/* Taking the fee writes a real receipt, so it needs a
                     method — a receipt that does not say how the money came in
                     cannot be reconciled against a cash box or a statement. */}
                 <Form.Item
@@ -834,7 +895,8 @@ export default function MemberForm({ open, onClose, member }) {
                   <Select options={masters.paymentMethods} />
                 </Form.Item>
               </Col>
-              <Col xs={12} md={8}>
+
+              <Col xs={24} md={8}>
                 <Form.Item name="joinFeesTxtId" label={t('लेन-देन आईडी')}>
                   <Input placeholder="Transaction ID" />
                 </Form.Item>

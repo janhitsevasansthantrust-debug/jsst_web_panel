@@ -22,7 +22,8 @@ export const MEMBER_INDEX_FIELDS = [
   'aadhaarNo', 'village', 'district', 'state', 'gender', 'jati',
   'ageGroupRange', 'age', 'status', 'agentId', 'agentName', 'programId',
   'programName', 'joinDateMs', 'bobDateMs', 'payAmount', 'joinFees',
-  'joinFeesDone', 'dueCount', 'dueAmount', 'paidCount', 'paidAmount',
+  'joinFeesDone', 'joinFeesPaid', 'joinFeesDue',
+  'dueCount', 'dueAmount', 'paidCount', 'paidAmount',
   'lastPaymentAt', 'photoURL', 'delete_flag',
 ];
 
@@ -59,6 +60,16 @@ export function toMemberEntry(id, m) {
     pay: m.payAmount ?? 0,
     fee: m.joinFees ?? 0,
     feeDone: Boolean(m.joinFeesDone),
+    /**
+     * How much of the fee has arrived, and how much has not.
+     *
+     * `feeDone` alone cannot answer "who still owes part of their joining
+     * fee", which is the whole question the bulk-collection screen is built
+     * around. Members enrolled before the amount was tracked have neither
+     * field, so the old boolean fills them in: paid means all of it.
+     */
+    feePaid: m.joinFeesPaid ?? (m.joinFeesDone ? (m.joinFees ?? 0) : 0),
+    feeDue: m.joinFeesDue ?? (m.joinFeesDone ? 0 : (m.joinFees ?? 0)),
     dueC: m.dueCount ?? 0,
     due: m.dueAmount ?? 0,
     paidC: m.paidCount ?? 0,
@@ -99,6 +110,8 @@ export function fromMemberEntry(e) {
     payAmount: e.pay,
     joinFees: e.fee,
     joinFeesDone: e.feeDone,
+    joinFeesPaid: e.feePaid ?? (e.feeDone ? e.fee : 0),
+    joinFeesDue: e.feeDue ?? (e.feeDone ? 0 : e.fee),
     dueCount: e.dueC,
     dueAmount: e.due,
     paidCount: e.paidC,

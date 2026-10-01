@@ -3,11 +3,11 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Alert, App, Button, Card, Checkbox, Col, DatePicker, Descriptions, Drawer, Form, Input, Modal, Progress, Row, Segmented, Select, Space, Statistic, Table, Tag, Typography,
+  Alert, App, Button, Card, Checkbox, Col, DatePicker, Descriptions, Divider, Drawer, Form, Input, InputNumber, Modal, Progress, Row, Segmented, Select, Space, Statistic, Table, Tag, Typography,
 } from 'antd';
 import {
   PlusOutlined, ReloadOutlined, UndoOutlined, SearchOutlined, FilePdfOutlined,
-  PrinterOutlined,
+  PrinterOutlined, EditOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 
@@ -345,6 +345,7 @@ function ClosingDetailDrawer({ closing, onClose }) {
   const t = useT();
   const open = Boolean(closing);
   const [revertOpen, setRevertOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   const [rowFilter, setRowFilter] = useState('pending');
   const [rowSearch, setRowSearch] = useState('');
@@ -382,9 +383,20 @@ function ClosingDetailDrawer({ closing, onClose }) {
       destroyOnHidden
       extra={
         closing?.status !== 'reverted' && (
-          <Button danger icon={<UndoOutlined />} onClick={() => setRevertOpen(true)}>
-            {t('वापस लें')}
-          </Button>
+          <Space size={6}>
+            <Button
+              icon={<PrinterOutlined />}
+              onClick={() => window.open(api.closings.formPdfUrl(closing.id), '_blank')}
+            >
+              {t('समापन पत्र')}
+            </Button>
+            <Button icon={<EditOutlined />} onClick={() => setEditOpen(true)}>
+              {t('संपादित')}
+            </Button>
+            <Button danger icon={<UndoOutlined />} onClick={() => setRevertOpen(true)}>
+              {t('वापस लें')}
+            </Button>
+          </Space>
         )
       }
     >
@@ -603,6 +615,14 @@ function ClosingDetailDrawer({ closing, onClose }) {
         </Space>
       )}
 
+      <EditClosingModal
+        closing={c}
+        id={closing?.id}
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        onDone={() => detail.refetch()}
+      />
+
       <RevertModal
         closing={closing}
         open={revertOpen}
@@ -743,6 +763,148 @@ function AfterClosingModal({ closing, onClose }) {
           </Text>
         </Space>
       )}
+    </Modal>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Correct a closing, and record what was paid out on it.
+ *
+ * Two jobs on one form because they are one visit: the family arrives, the
+ * money is counted and handed over, and whatever was typed wrong when the case
+ * was registered gets fixed at the same moment.
+ *
+ * The date warning is not decoration. The closing date is the ONE field
+ * eligibility is decided by, so moving it changes who owes this closing — and
+ * the member's own exit date moves with it, which changes what THEY owe for
+ * everyone else's. Worth saying out loud on the screen that does it.
+ */
+function EditClosingModal({ closing, id, open, onClose, onDone }) {
+  const t = useT();
+  const [form] = Form.useForm();
+  const { message } = App.useApp();
+  const queryClient = useQueryClient();
+
+  const save = useMutation({
+    mutationFn: (values) => {
+      const { closingDate, memberContributed, membersCount, amountGiven,
+        paymentMode, oldPending, netAmount, ...rest } = values;
+
+      return api.closings.update(id, {
+        ...rest,
+        ...(closingDate
+          ? {
+              closingDate: closingDate.format('DD-MM-YYYY'),
+              closingDateMs: closingDate.startOf('day').valueOf(),
+            }
+          : {}),
+        payout: {
+          memberContributed, membersCount, amountGiven,
+          paymentMode, oldPending, netAmount,
+        },
+      });
+    },
+    onSuccess: () => {
+      message.success(t('क्लोजिंग अपडेट हो गई'));
+      queryClient.invalidateQueries({ queryKey: keys.closings });
+      queryClient.invalidateQueries({ queryKey: ['members'] });
+      onDone?.();
+      onClose();
+    },
+    onError: (err) => message.error(err.message),
+  });
+
+  const p = closing?.payout ?? {};
+
+  return (
+    <Modal
+      title={t('क्लोजिंग संपादित करें')}
+      open={open}
+      onCancel={onClose}
+      onOk={() => form.submit()}
+      confirmLoading={save.isPending}
+      okText={t('सहेजें')}
+      cancelText={t('रद्द')}
+      width={640}
+      destroyOnHidden
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        onFinish={save.mutate}
+        initialValues={{
+          closingDate: closing?.dateMs ? dayjs(closing.dateMs) : null,
+          notes: closing?.notes ?? '',
+          // Seeded from what has actually been collected so far, then it stops
+          // being a calculation and becomes a record — the figure the family
+          // signed against.
+          memberContributed: p.memberContributed ?? closing?.paidAmount ?? 0,
+          membersCount: p.membersCount ?? closing?.paidCount ?? 0,
+          amountGiven: p.amountGiven ?? closing?.paidAmount ?? 0,
+          paymentMode: p.paymentMode ?? 'नकद',
+          oldPending: p.oldPending ?? 0,
+          netAmount: p.netAmount ?? 0,
+        }}
+      >
+        <Row gutter={12}>
+          <Col span={12}>
+            <Form.Item
+              name="closingDate"
+              label={t('क्लोजिंग तिथि')}
+              extra={t('तारीख़ बदलने पर कौन भुगतान करेगा, यह दोबारा तय होगा')}
+            >
+              <DatePicker format="DD-MM-YYYY" style={{ width: '100%' }} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="paymentMode" label={t('भुगतान का तरीक़ा')}>
+              <Input placeholder={t('नकद / चेक')} />
+            </Form.Item>
+          </Col>
+        </Row>
+
+        <Divider orientation="left" style={{ fontSize: 13 }}>
+          {t('समापन पत्र की राशि')}
+        </Divider>
+
+        <Row gutter={12}>
+          <Col span={12}>
+            <Form.Item name="memberContributed" label={t('सदस्यों ने दिया')}>
+              <InputNumber min={0} prefix="₹" style={{ width: '100%' }} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="membersCount" label={t('कितने सदस्यों ने')}>
+              <InputNumber min={0} style={{ width: '100%' }} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="amountGiven" label={t('दी जा रही राशि')}>
+              <InputNumber min={0} prefix="₹" style={{ width: '100%' }} />
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="oldPending" label={t('पुरानी बकाया (काटी गई)')}>
+              <InputNumber min={0} prefix="₹" style={{ width: '100%' }} />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item
+              name="netAmount"
+              label={t('नेट राशि')}
+              extra={t('जो परिवार को असल में मिल रही है — यही पत्र पर बड़े अक्षरों में छपेगी')}
+            >
+              <InputNumber min={0} prefix="₹" style={{ width: '100%' }} />
+            </Form.Item>
+          </Col>
+        </Row>
+
+        <Form.Item name="notes" label={t('टिप्पणी')}>
+          <Input.TextArea rows={2} />
+        </Form.Item>
+      </Form>
     </Modal>
   );
 }

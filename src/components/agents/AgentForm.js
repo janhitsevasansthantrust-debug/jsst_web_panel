@@ -350,7 +350,7 @@ export default function AgentForm({ open, onClose, agent }) {
             message={t('दो अलग-अलग कमीशन')}
             description={
               <Text style={{ fontSize: 13 }}>
-                <strong>{t('जॉइनिंग फीस')}</strong> — {t('नया सदस्य जोड़ने पर।')}{' '}
+                <strong>{t('नामांकन शुल्क')}</strong> — {t('नया सदस्य जोड़ने पर।')}{' '}
                 <strong>{t('वसूली')}</strong> — {t('क्लोजिंग का भुगतान इकट्ठा करने पर। दोनों हर रसीद के साथ उसी transaction में दर्ज होते हैं, इसलिए कमीशन और वसूली कभी अलग नहीं हो सकते।')}
               </Text>
             }
@@ -367,7 +367,7 @@ export default function AgentForm({ open, onClose, agent }) {
 
           {override && (
             <>
-              <RuleFields prefix="joinFee" title={t('जॉइनिंग फीस पर')} />
+              <RuleFields prefix="joinFee" title={t('नामांकन शुल्क पर')} />
               <RuleFields prefix="collection" title={t('वसूली पर')} />
             </>
           )}

@@ -52,6 +52,14 @@ const QUICK = [
   { value: 'all', label: 'सभी' },
   { value: 'accepted', label: 'स्वीकृत' },
   { value: 'due', label: 'बकायादार' },
+  /**
+   * Who still owes joining fees — part of it or all of it.
+   *
+   * Not the same question as "बकायादार", which is about closings. A member can
+   * be fully paid up on every closing and still owe ₹8,900 of their enrolment
+   * fee, and until this tab existed there was no screen that would list them.
+   */
+  { value: 'feeDue', label: 'शुल्क बाकी' },
   { value: 'blocked', label: 'ब्लॉक' },
 ];
 
@@ -131,7 +139,8 @@ export default function MembersPage() {
 
   /** Which quick tab is lit — derived, never stored, so it cannot disagree. */
   const quick =
-    filters.hasDue === true ? 'due'
+    filters.hasFeeDue === true ? 'feeDue'
+      : filters.hasDue === true ? 'due'
       : filters.status?.length === 1 && filters.status[0] === MEMBER_STATUS.ACCEPTED ? 'accepted'
       : filters.status?.length === 1 && filters.status[0] === MEMBER_STATUS.BLOCKED ? 'blocked'
       : activeCount === 0 ? 'all'
@@ -140,6 +149,9 @@ export default function MembersPage() {
   function applyQuick(value) {
     if (value === 'all') return setFilters({ ...EMPTY_FILTERS, q: filters.q });
     if (value === 'due') return setFilters({ ...EMPTY_FILTERS, q: filters.q, hasDue: true });
+    if (value === 'feeDue') {
+      return setFilters({ ...EMPTY_FILTERS, q: filters.q, hasFeeDue: true });
+    }
     setFilters({ ...EMPTY_FILTERS, q: filters.q, status: [value] });
   }
 
@@ -400,6 +412,41 @@ export default function MembersPage() {
         valueFormatter: (p) => hiDate(p.value),
       },
       {
+        /**
+         * The joining fee, shown as what is left rather than a tick.
+         *
+         * A member can owe nothing on closings and still owe most of their
+         * enrolment fee; this is the column that makes that visible in the
+         * list instead of only inside their record.
+         */
+        headerName: t('शुल्क बाकी'),
+        field: 'joinFeesDue',
+        width: 125,
+        type: 'rightAligned',
+        cellRenderer: (p) => {
+          const m = p.data;
+          if (!m) return null;
+          const left = m.joinFeesDue ?? 0;
+          if (left <= 0) {
+            return (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {(m.joinFees ?? 0) > 0 ? t('जमा') : '—'}
+              </Text>
+            );
+          }
+          return (
+            <div style={{ lineHeight: 1.3, textAlign: 'right' }}>
+              <div style={{ color: 'var(--warn)', fontWeight: 600 }}>{inr(left)}</div>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                {(m.joinFeesPaid ?? 0) > 0
+                  ? t('{p} जमा / {t}', { p: inr(m.joinFeesPaid), t: inr(m.joinFees) })
+                  : t('कुल {t}', { t: inr(m.joinFees) })}
+              </Text>
+            </div>
+          );
+        },
+      },
+      {
         headerName: t('बकाया'),
         field: 'dueAmount',
         width: 125,
@@ -423,12 +470,41 @@ export default function MembersPage() {
         },
       },
       {
+        /**
+         * What this member has handed over — all of it.
+         *
+         * `paidAmount` alone is the closings total, so a member who paid only
+         * towards their joining fee showed ₹0 in a column headed "जमा". The
+         * fee is named underneath rather than folded in silently, because the
+         * two are reconciled against different things.
+         */
         headerName: t('जमा'),
         field: 'paidAmount',
-        width: 115,
+        width: 130,
         type: 'rightAligned',
-        valueFormatter: money,
-        cellStyle: { color: 'var(--paid)' },
+        valueGetter: (p) =>
+          (p.data?.paidAmount ?? 0) + (p.data?.joinFeesPaid ?? 0),
+        cellRenderer: (p) => {
+          const m = p.data;
+          if (!m) return null;
+          const closings = m.paidAmount ?? 0;
+          const fee = m.joinFeesPaid ?? 0;
+          if (closings + fee <= 0) return <Text type="secondary">—</Text>;
+          return (
+            <div style={{ lineHeight: 1.3, textAlign: 'right' }}>
+              <div style={{ color: 'var(--paid)', fontWeight: 600 }}>
+                {inr(closings + fee)}
+              </div>
+              {fee > 0 && (
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  {closings > 0
+                    ? t('क्लोजिंग {c} · शुल्क {f}', { c: inr(closings), f: inr(fee) })
+                    : t('शुल्क {f}', { f: inr(fee) })}
+                </Text>
+              )}
+            </div>
+          );
+        },
       },
       {
         headerName: '',
@@ -491,11 +567,27 @@ export default function MembersPage() {
         </Col>
         <Col xs={12} lg={6}>
           <StatCard icon={<RiseOutlined />} color="var(--paid)" label={t('कुल जमा')}
-            value={inr(totals.paidAmount)} hint={t('अब तक')} />
+            value={inr((totals.paidAmount ?? 0) + (totals.feePaidAmount ?? 0))}
+            hint={
+              totals.feePaidAmount
+                ? t('क्लोजिंग {c} · शुल्क {f}', {
+                    c: inr(totals.paidAmount),
+                    f: inr(totals.feePaidAmount),
+                  })
+                : t('अब तक')
+            } />
         </Col>
         <Col xs={12} lg={6}>
-          <StatCard icon={<ExclamationCircleOutlined />} color="var(--warn)" label={t('जॉइनिंग फीस बाकी')}
-            value={num(totals.feePending)} hint={t('सदस्य')} />
+          <StatCard icon={<ExclamationCircleOutlined />} color="var(--warn)" label={t('नामांकन शुल्क बाकी')}
+            value={inr(totals.feeDueAmount)}
+            hint={
+              totals.feePartial
+                ? t('{n} सदस्यों पर · {p} आंशिक', {
+                    n: num(totals.feePending),
+                    p: num(totals.feePartial),
+                  })
+                : t('{n} सदस्यों पर', { n: num(totals.feePending) })
+            } />
         </Col>
       </Row>
 
@@ -540,29 +632,46 @@ export default function MembersPage() {
             options={SORTS.map((o) => ({ ...o, label: t(o.label) }))}
           />
 
-          <Dropdown
-            trigger={['click']}
-            menu={{
-              items: [
-                {
-                  key: 'csv',
-                  icon: <FileExcelOutlined />,
-                  label: t('CSV (Excel में खुलेगी)'),
-                  onClick: () => download('csv'),
-                },
-                {
-                  key: 'pdf',
-                  icon: <FilePdfOutlined />,
-                  label: t('PDF (छपाई के लिए)'),
-                  onClick: () => download('pdf'),
-                },
-              ],
-            }}
-          >
-            <Button size="large" icon={<DownloadOutlined />} loading={Boolean(exporting)}>
-              {t('डाउनलोड')}
-            </Button>
-          </Dropdown>
+          {/*
+            Pinned to the far right of the toolbar.
+
+            It used to sit at the end of the same run as the search box, the
+            quick tabs, the filter button and the sort — and adding one more
+            quick tab was enough to push it past the edge on a laptop, where it
+            simply looked like there was no export at all. An action people go
+            looking for needs a fixed place, not whatever space is left over.
+          */}
+          <div style={{ marginInlineStart: 'auto' }}>
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  {
+                    key: 'csv',
+                    icon: <FileExcelOutlined />,
+                    label: t('CSV (Excel में खुलेगी)'),
+                    onClick: () => download('csv'),
+                  },
+                  {
+                    key: 'pdf',
+                    icon: <FilePdfOutlined />,
+                    label: t('PDF (छपाई के लिए)'),
+                    onClick: () => download('pdf'),
+                  },
+                ],
+              }}
+            >
+              <Button
+                size="large"
+                type="primary"
+                ghost
+                icon={<DownloadOutlined />}
+                loading={Boolean(exporting)}
+              >
+                {t('डाउनलोड')}
+              </Button>
+            </Dropdown>
+          </div>
         </Space>
 
         {/* Applied filters, each removable on its own. Without this the only

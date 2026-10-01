@@ -20,9 +20,19 @@ import { EXPORT_COLUMNS, cellValue } from '../domain/exportMembers.js';
  * either drop columns or shrink the type past reading size.
  */
 
-/** Not every export column earns its place on paper. */
+/**
+ * Not every export column earns its place on paper.
+ *
+ * `joinFeesDue` stays — it is the number somebody acts on, and a printed list
+ * of who owes enrolment money without the amount is just a list of names.
+ * `joinFeesPaid` and the fee total go only to the CSV: on A4 landscape every
+ * column added shrinks all the others, and three fee columns would cost the
+ * village and father's-name columns the width they need to stay readable.
+ */
 const PRINT_COLUMNS = EXPORT_COLUMNS.filter(
-  (c) => !['aadhaarNo', 'joinFees', 'joinFeesDone', 'ageGroupRange'].includes(c.key),
+  (c) => !['aadhaarNo', 'joinFees', 'joinFeesPaid', 'joinFeesDone', 'ageGroupRange',
+    'totalPaid']
+    .includes(c.key),
 );
 
 const TOTAL_WIDTH = PRINT_COLUMNS.reduce((s, c) => s + c.width, 0);
@@ -131,6 +141,20 @@ export function MemberListPdf({ trust, members, totals, filters, generatedAt }) 
             {'   ·   '}कुल बकाया: ₹{fmt(totals?.dueAmount)}
             {'   ·   '}कुल जमा: ₹{fmt(totals?.paidAmount)}
           </Text>
+          {/* The joining fee gets its own line, in money.
+              A printed list of who owes enrolment money is useless if the only
+              figure on it is a headcount — the person carrying this sheet is
+              going to add up what they are owed. */}
+          {totals?.feeDueAmount > 0 && (
+            <Text style={styles.totalsText}>
+              नामांकन शुल्क बाकी: ₹{fmt(totals.feeDueAmount)}
+              {'   ·   '}{fmt(totals.feePending)} सदस्यों पर
+              {totals.feePartial
+                ? `   ·   ${fmt(totals.feePartial)} आंशिक जमा`
+                : ''}
+              {'   ·   '}शुल्क जमा हुआ: ₹{fmt(totals.feePaidAmount)}
+            </Text>
+          )}
         </View>
 
         {/* ── signature and footer ────────────────────────────────────── */}

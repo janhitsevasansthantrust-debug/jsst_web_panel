@@ -17,6 +17,7 @@ import {
 } from '../../lib/registration.js';
 import { postPayment } from './payments.js';
 import { memberKeywords } from '../../lib/memberSearch.js';
+import { joinFeesState } from '../../lib/joinFees.js';
 import { badRequest, conflict, notFound } from '../http.js';
 import { assertSameProgram } from './scope.js';
 import {
@@ -323,6 +324,13 @@ export async function createMember(scope, input) {
        * collected with no record of it.
        */
       joinFeesDone: false,
+      /**
+       * The fee is tracked as an amount, so part payment is representable.
+       * `joinFeesDone` is a mirror of `joinFeesDue === 0`, kept because
+       * filters and the search index need a plain field to match on.
+       */
+      joinFeesPaid: 0,
+      joinFeesDue: rates.joinFees ?? 0,
       joinFeesTxtId: input.joinFeesTxtId ?? '',
       joinFeesReceiptId: null,
 
@@ -434,15 +442,30 @@ export async function createMember(scope, input) {
    * fix at the desk. The other way round would be a receipt pointing at a
    * member who does not exist.
    */
-  if (input.joinFeesDone && Number(created.joinFees) > 0) {
+  /**
+   * How much of it is actually being handed over.
+   *
+   * `joinFeesPaidNow` when the counter typed a figure, the whole fee when they
+   * only ticked the box (which is what every older caller sends), and never
+   * more than the fee itself — the age band sets that, not the form.
+   */
+  const feeTotal = Number(created.joinFees) || 0;
+  const feeNow = Math.min(
+    feeTotal,
+    input.joinFeesPaidNow !== undefined
+      ? Number(input.joinFeesPaidNow) || 0
+      : (input.joinFeesDone ? feeTotal : 0),
+  );
+
+  if (feeNow > 0) {
     const fee = await postPayment(scope, {
       memberId: created.id,
       seqs: [],
-      joinFeeAmount: Number(created.joinFees),
+      joinFeeAmount: feeNow,
       method: input.joinFeesMethod ?? PAYMENT_METHOD.CASH,
       paidAtMs: created.joinDateMs ?? Date.now(),
       reference: input.joinFeesTxtId ?? '',
-      note: 'नामांकन शुल्क',
+      note: feeNow < feeTotal ? 'नामांकन शुल्क (आंशिक)' : 'नामांकन शुल्क',
       // Whoever enrolled them collected it. This is the line that pays the
       // agent their enrolment commission, through exactly the same code path
       // as every other receipt.
@@ -452,7 +475,9 @@ export async function createMember(scope, input) {
 
     return {
       ...created,
-      joinFeesDone: true,
+      joinFeesPaid: feeNow,
+      joinFeesDue: Math.max(0, feeTotal - feeNow),
+      joinFeesDone: feeNow >= feeTotal,
       joinFeesReceiptId: fee.receipt?.id ?? null,
       joinFeeReceipt: fee.receipt ?? null,
     };
@@ -545,6 +570,18 @@ export async function updateMember(scope, memberId, patch) {
         locationGroupId: safe.locationGroupId ?? member.locactionGroupId,
       });
       Object.assign(safe, rates);
+
+      /**
+       * A new band means a new joining fee, so what is outstanding changes.
+       *
+       * Without this a member moved from an ₹1,100 band to an ₹11,000 one
+       * would keep `joinFeesDue: 0` and go on showing the fee as settled,
+       * while the counter screen offered nothing to collect.
+       */
+      const fees = joinFeesState({ ...member, joinFees: rates.joinFees });
+      safe.joinFeesDue = fees.due;
+      safe.joinFeesDone = fees.done;
+      safe.joinFeesPaid = fees.paid;
     }
 
     // Moved to a different agent (or to none): take the name from the agent

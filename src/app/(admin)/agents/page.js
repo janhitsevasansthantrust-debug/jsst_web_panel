@@ -4,11 +4,10 @@ import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Button, Card, Col, Row, Space, Statistic, Tag, Typography, Tooltip, App,
-  Popconfirm, Modal, Alert,
+  Popconfirm, Modal, Alert, Segmented, Switch,
 } from 'antd';
 import {
-  PlusOutlined, ReloadOutlined, EditOutlined, KeyOutlined, StopOutlined,
-  CheckOutlined, SwapOutlined,
+  PlusOutlined, ReloadOutlined, EditOutlined, KeyOutlined, SwapOutlined,
 } from '@ant-design/icons';
 
 import PageHeader from '../../../components/ui/PageHeader.js';
@@ -35,10 +34,24 @@ export default function AgentsPage() {
   const [credentials, setCredentials] = useState(null);
   const [handingOver, setHandingOver] = useState(null);
 
+  /**
+   * Which agents the table shows.
+   *
+   * The list used to ask the server for active agents only, which made
+   * switching an agent off look like deleting them: the row left the table, and
+   * the only button that could switch them back on was in the table they had
+   * just vanished from. Everything is fetched now and the filter is local, so
+   * "बंद" is one click away rather than a support call.
+   */
+  const [show, setShow] = useState('active');
+
   const { message } = App.useApp();
   const queryClient = useQueryClient();
 
-  const query = useQuery({ queryKey: keys.agents, queryFn: () => api.agents.list() });
+  const query = useQuery({
+    queryKey: [...keys.agents, 'all'],
+    queryFn: () => api.agents.list({ includeInactive: true }),
+  });
 
   /**
    * Per-agent member counts, from the member search index.
@@ -60,8 +73,16 @@ export default function AgentsPage() {
     return map;
   }, [memberCounts.data]);
 
-  const agents = query.data?.agents ?? [];
+  const allAgents = query.data?.agents ?? [];
   const summary = query.data?.summary ?? {};
+
+  const offCount = allAgents.filter((a) => a.active === false).length;
+
+  const agents = useMemo(() => {
+    if (show === 'all') return allAgents;
+    if (show === 'off') return allAgents.filter((a) => a.active === false);
+    return allAgents.filter((a) => a.active !== false);
+  }, [allAgents, show]);
 
   const resetPassword = useMutation({
     mutationFn: (agent) =>
@@ -149,15 +170,52 @@ export default function AgentsPage() {
           p.value ? <Tag color="purple">{t('अपना नियम')}</Tag> : <Tag>{t('योजना का')}</Tag>,
       },
       {
-        headerName: t('स्थिति'),
+        headerName: t('चालू / बंद'),
         colId: 'status',
-        width: 120,
+        width: 176,
+        /** Sortable on the flag itself, so "show me who is off" is one click. */
+        valueGetter: (p) => (p.data?.active === false ? 0 : 1),
         cellRenderer: (p) => {
           const agent = p.data;
           if (!agent) return null;
+
+          const on = agent.active !== false;
+          const busy = toggleActive.isPending && toggleActive.variables?.id === agent.id;
+
           return (
-            <Space size={4} wrap>
-              {agent.active ? <Tag color="green">{t('सक्रिय')}</Tag> : <Tag>{t('बंद')}</Tag>}
+            <Space size={6} wrap>
+              {/* Switching OFF asks first — it signs the agent out of every
+                  device they are holding. Switching back on is harmless, so it
+                  does not ask. */}
+              {on ? (
+                <Popconfirm
+                  title={t('लॉगिन बंद करें?')}
+                  description={t('एजेंट तुरंत हर डिवाइस से लॉग आउट हो जाएगा। सदस्य और कमीशन का हिसाब वैसा ही रहेगा।')}
+                  okText={t('बंद करें')}
+                  cancelText={t('रद्द')}
+                  okButtonProps={{ danger: true }}
+                  disabled={agent.isSelf}
+                  onConfirm={() => toggleActive.mutate(agent)}
+                >
+                  <Switch size="small" checked loading={busy} disabled={agent.isSelf} />
+                </Popconfirm>
+              ) : (
+                <Switch
+                  size="small"
+                  checked={false}
+                  loading={busy}
+                  onChange={() => toggleActive.mutate(agent)}
+                />
+              )}
+
+              <Text type={on ? undefined : 'secondary'} style={{ fontSize: 12 }}>
+                {on ? t('चालू') : t('बंद')}
+              </Text>
+
+              {/* Your own login cannot be switched off from here — it would end
+                  your own session mid-click. The server refuses it too. */}
+              {agent.isSelf && <Tag color="gold" style={{ marginInlineEnd: 0 }}>{t('आपका खाता')}</Tag>}
+
               {/* A position that has changed hands is worth seeing at a
                   glance — it explains why a familiar round has a new name. */}
               {agent.handovers?.length > 0 && (
@@ -179,14 +237,14 @@ export default function AgentsPage() {
         headerName: t('कार्रवाई'),
         colId: 'actions',
         pinned: 'right',
-        width: 156,
+        width: 112,
         sortable: false,
         filter: false,
         cellRenderer: (p) => {
           const agent = p.data;
           if (!agent) return null;
           return (
-            <Space size={4} onClick={(e) => e.stopPropagation()}>
+            <Space size={4}>
               <Tooltip title={t('विवरण संपादित करें')}>
                 <Button
                   size="small"
@@ -199,15 +257,22 @@ export default function AgentsPage() {
                 />
               </Tooltip>
 
-              <Tooltip title={t('नया पासवर्ड बनाएँ')}>
+              <Tooltip
+                title={
+                  agent.isSelf
+                    ? t('यह आपका ही लॉगिन है — अपना पासवर्ड सेटिंग से बदलें')
+                    : t('नया पासवर्ड बनाएँ')
+                }
+              >
                 <Popconfirm
                   title={t('नया पासवर्ड बनाएँ?')}
                   description={t('पुराना पासवर्ड तुरंत बंद हो जाएगा और एजेंट हर डिवाइस से लॉग आउट हो जाएगा।')}
                   okText={t('बनाएँ')}
                   cancelText={t('रद्द')}
+                  disabled={agent.isSelf}
                   onConfirm={() => resetPassword.mutate(agent)}
                 >
-                  <Button size="small" icon={<KeyOutlined />} />
+                  <Button size="small" icon={<KeyOutlined />} disabled={agent.isSelf} />
                 </Popconfirm>
               </Tooltip>
 
@@ -215,16 +280,8 @@ export default function AgentsPage() {
                 <Button
                   size="small"
                   icon={<SwapOutlined />}
+                  disabled={agent.isSelf}
                   onClick={() => setHandingOver(agent)}
-                />
-              </Tooltip>
-
-              <Tooltip title={agent.active ? t('लॉगिन बंद करें') : t('फिर चालू करें')}>
-                <Button
-                  size="small"
-                  danger={agent.active}
-                  icon={agent.active ? <StopOutlined /> : <CheckOutlined />}
-                  onClick={() => toggleActive.mutate(agent)}
                 />
               </Tooltip>
             </Space>
@@ -233,17 +290,31 @@ export default function AgentsPage() {
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [byAgent],
+    [byAgent, toggleActive.isPending, toggleActive.variables],
   );
 
   return (
     <>
       <PageHeader
         title={t('एजेंट')}
-        subtitle={`${agents.length} ${t('एजेंट')}`}
+        subtitle={
+          offCount
+            ? `${allAgents.length - offCount} ${t('चालू')} · ${offCount} ${t('बंद')}`
+            : `${allAgents.length} ${t('एजेंट')}`
+        }
         error={query.error}
         extra={
           <>
+            <Segmented
+              size="small"
+              value={show}
+              onChange={setShow}
+              options={[
+                { label: t('चालू'), value: 'active' },
+                { label: offCount ? `${t('बंद')} (${offCount})` : t('बंद'), value: 'off' },
+                { label: t('सब'), value: 'all' },
+              ]}
+            />
             <Button icon={<ReloadOutlined />} onClick={() => query.refetch()} />
             <Button
               type="primary"
@@ -282,16 +353,26 @@ export default function AgentsPage() {
         </Col>
       </Row>
 
+      {/*
+        No `onRowClick`.
+        Clicking a row used to open the edit drawer, and that was worse than
+        merely unwanted: AG Grid attaches its row listener directly to the row
+        element, BELOW React's root, so the `stopPropagation()` on the action
+        cell never reached it. Every button in the row — including the key — was
+        also opening the editor behind whatever it had just opened. The pencil
+        is the one way in.
+      */}
       <DataGrid
         rows={agents}
         columns={columns}
         loading={query.isLoading}
         getRowId={(p) => p.data.id}
-        onRowClick={(row) => {
-          setEditing(row);
-          setOpen(true);
-        }}
-        emptyText={t('कोई एजेंट नहीं — ऊपर से जोड़ें')}
+        getRowStyle={(p) => (p.data?.active === false ? { opacity: 0.55 } : undefined)}
+        emptyText={
+          show === 'off'
+            ? t('कोई बंद एजेंट नहीं')
+            : t('कोई एजेंट नहीं — ऊपर से जोड़ें')
+        }
       />
 
       <AgentForm open={open} agent={editing} onClose={() => setOpen(false)} />

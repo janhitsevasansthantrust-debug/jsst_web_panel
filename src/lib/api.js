@@ -176,7 +176,10 @@ export const api = {
     list: (params) => request(`/closings${qs(params)}`),
     create: (body) => request('/closings', { method: 'POST', body }),
     collection: (id, params) => request(`/closings/${id}/collection${qs(params)}`),
+    update: (id, body) => request(`/closings/${id}`, { method: 'PATCH', body }),
     revert: (id, body) => request(`/closings/${id}/revert`, { method: 'POST', body }),
+    /** सदस्यता समापन पत्र — the sheet the family signs for the payout. */
+    formPdfUrl: (id) => apiUrl(`/closings/${id}/form-pdf`),
     closable: (q) => request(`/closings/closable${qs({ q })}`),
     /**
      * The क्लोजिंग सूची for a period — the office's register page, with what
@@ -244,6 +247,21 @@ export const api = {
      */
     create: (body, idempotencyKey) =>
       request('/payments', {
+        method: 'POST',
+        body,
+        headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {},
+      }),
+    /**
+     * One deposit, many members — an agent banking a whole round.
+     *
+     * Call it once with `preview: true` to get the proposed split, show that,
+     * and call it again without `preview` to write it. The same
+     * `idempotencyKey` on both the preview and the real submit is harmless —
+     * a preview writes nothing — and on a retried submit it is what returns
+     * the receipts already written instead of taking the money twice.
+     */
+    bulk: (body, idempotencyKey) =>
+      request('/payments/bulk', {
         method: 'POST',
         body,
         headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {},

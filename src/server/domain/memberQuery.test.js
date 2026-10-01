@@ -407,3 +407,55 @@ test('a country code does not stop a phone number matching', () => {
     assert.deepEqual(names(typed), ['रामलाल'], `${typed} should find the member`);
   }
 });
+
+/* ── the joining fee, in money ───────────────────────────────────────────── */
+
+test('hasFeeDue finds part-paid fees, which hasDue cannot', () => {
+  const items = [
+    // Owes closings, fee settled.
+    M({ id: 'a', dueC: 2, due: 400, fee: 1100, feePaid: 1100, feeDue: 0, feeDone: true }),
+    // Owes nothing on closings, but ₹8,900 of their fee.
+    M({ id: 'b', dueC: 0, due: 0, fee: 11000, feePaid: 2100, feeDue: 8900, feeDone: false }),
+  ];
+
+  assert.deepEqual(filterMembers(items, { hasDue: true }).map((m) => m.id), ['a']);
+  assert.deepEqual(filterMembers(items, { hasFeeDue: true }).map((m) => m.id), ['b']);
+  assert.deepEqual(
+    filterMembers(items, { owesAnything: true }).map((m) => m.id).sort(),
+    ['a', 'b'],
+  );
+});
+
+test('hasFeeDue false keeps only fully-paid fees', () => {
+  const items = [
+    M({ id: 'a', fee: 1100, feeDue: 0, feeDone: true }),
+    M({ id: 'b', fee: 11000, feeDue: 8900, feeDone: false }),
+  ];
+  assert.deepEqual(filterMembers(items, { hasFeeDue: false }).map((m) => m.id), ['a']);
+});
+
+test('a legacy entry with no fee amounts falls back to the old flag', () => {
+  // Written before feeDue/feePaid existed: feeDone is all there is.
+  const paid = M({ id: 'a', fee: 1100, feeDone: true });
+  const unpaid = M({ id: 'b', fee: 1100, feeDone: false });
+  delete paid.feeDue; delete paid.feePaid;
+  delete unpaid.feeDue; delete unpaid.feePaid;
+
+  assert.deepEqual(filterMembers([paid, unpaid], { hasFeeDue: true }).map((m) => m.id), ['b']);
+  assert.equal(summarise([paid]).feeDueAmount, 0);
+  assert.equal(summarise([unpaid]).feeDueAmount, 1100);
+});
+
+test('summarise totals the fee in rupees, not just heads', () => {
+  const t = summarise([
+    M({ id: 'a', fee: 11000, feePaid: 2100, feeDue: 8900, feeDone: false }),
+    M({ id: 'b', fee: 1100, feePaid: 0, feeDue: 1100, feeDone: false }),
+    M({ id: 'c', fee: 1100, feePaid: 1100, feeDue: 0, feeDone: true }),
+  ]);
+
+  assert.equal(t.feeDueAmount, 10000);
+  assert.equal(t.feePaidAmount, 3200);
+  assert.equal(t.feePending, 2);
+  // Only 'a' has put something towards a fee that is still short.
+  assert.equal(t.feePartial, 1);
+});

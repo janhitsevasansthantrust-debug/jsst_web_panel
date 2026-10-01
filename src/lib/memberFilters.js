@@ -29,6 +29,8 @@ export const EMPTY_FILTERS = {
   ageMax: undefined,
   hasDue: undefined,
   feeDone: undefined,
+  /** Part or all of the joining fee still outstanding. */
+  hasFeeDue: undefined,
   allPrograms: false,
 };
 
@@ -41,7 +43,8 @@ const FIELD_LABEL = {
   village: 'गाँव',
   district: 'ज़िला',
   hasDue: 'बकाया',
-  feeDone: 'जॉइनिंग फीस',
+  feeDone: 'नामांकन शुल्क',
+  hasFeeDue: 'शुल्क बाकी',
   allPrograms: 'योजना',
 };
 
@@ -61,6 +64,7 @@ export function cleanFilters(filters) {
   }
   if (filters.hasDue === false) out.hasDue = false;
   if (filters.feeDone === false) out.feeDone = false;
+  if (filters.hasFeeDue === false) out.hasFeeDue = false;
   return out;
 }
 
@@ -113,10 +117,24 @@ export function describeFilters(filters, facets = {}) {
     chips.push({ key: 'hasDue', label: 'कोई बकाया नहीं', clear: { hasDue: undefined } });
   }
   if (filters.feeDone === true) {
-    chips.push({ key: 'feeDone', label: 'फीस जमा', clear: { feeDone: undefined } });
+    chips.push({ key: 'feeDone', label: 'शुल्क पूरा जमा', clear: { feeDone: undefined } });
+  }
+  if (filters.hasFeeDue === true) {
+    chips.push({
+      key: 'hasFeeDue',
+      label: 'नामांकन शुल्क बाकी',
+      clear: { hasFeeDue: undefined },
+    });
+  }
+  if (filters.hasFeeDue === false) {
+    chips.push({
+      key: 'hasFeeDue',
+      label: 'शुल्क पूरा जमा',
+      clear: { hasFeeDue: undefined },
+    });
   }
   if (filters.feeDone === false) {
-    chips.push({ key: 'feeDone', label: 'फीस बाकी', clear: { feeDone: undefined } });
+    chips.push({ key: 'feeDone', label: 'शुल्क बाकी', clear: { feeDone: undefined } });
   }
 
   if (filters.ageMin != null || filters.ageMax != null) {

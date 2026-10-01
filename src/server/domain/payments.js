@@ -2,11 +2,13 @@ import 'server-only';
 
 import { db, FieldValue, serverNow, inc, chunk } from '../firebase/admin.js';
 import { applyPayment, reversePayment } from './ledger.js';
-import { getClosingsIndex, patchMemberInIndex } from './indexes.js';
+import { getClosingsIndex, patchMemberInIndex, patchMembersInIndex } from './indexes.js';
 import {
   resolvePolicy, commissionForPayment, commissionForJoinFee, round2,
 } from './commission.js';
 import { badRequest, conflict, notFound } from '../http.js';
+import { joinFeesState, applyJoinFeePayment } from '../../lib/joinFees.js';
+import { allocateDeposit, allocateExplicit } from '../../lib/bulkAllocate.js';
 import { assertSameProgram } from './scope.js';
 import {
   LIMITS,
@@ -58,9 +60,17 @@ import {
  * @param {string} [input.collectedByAgentId]
  * @param {string} [input.idempotencyKey]
  */
-export async function postPayment(scope, input) {
+export async function postPayment(scope, input, context = {}) {
   const { trustId, programId, uid } = scope;
-  const { items: closings } = await getClosingsIndex(trustId, programId);
+
+  /**
+   * The closings index and the group codes are the same for every member, so a
+   * caller posting a run of receipts hands them in rather than making this
+   * re-read them per member. Banking an agent's round of forty was doing two
+   * extra round trips per member for data that had not changed.
+   */
+  const closings =
+    context.closings ?? (await getClosingsIndex(trustId, programId)).items;
 
   /**
    * Closing-group codes, for the receipt number.
@@ -70,7 +80,7 @@ export async function postPayment(scope, input) {
    * per payment, and it is the same read whether the payment covers one
    * closing or four hundred.
    */
-  const groupCodes = await loadGroupCodes(trustId, programId);
+  const groupCodes = context.groupCodes ?? (await loadGroupCodes(trustId, programId));
 
   const requested = [...new Set(input.seqs ?? [])];
   const joinFeeOnly = !requested.length && Number(input.joinFeeAmount) > 0;
@@ -127,13 +137,26 @@ export async function postPayment(scope, input) {
     );
   }
 
-  // Refresh this member in the search index. Every list, filter and total in
-  // the app is served from that index, so a payment that does not reach it is
-  // a payment the operator cannot see they took — they would collect it twice.
-  // Outside the transaction on purpose: the money is already recorded, and a
-  // failed index write must not roll back a receipt. `reindex` heals it.
-  await patchMemberInIndex(scope.trustId, input.memberId, await readMember(scope, input.memberId))
-    .catch(() => {});
+  /**
+   * Refresh this member in the search index. Every list, filter and total in
+   * the app is served from that index, so a payment that does not reach it is
+   * a payment the operator cannot see they took — they would collect it twice.
+   *
+   * Outside the transaction on purpose: the money is already recorded, and a
+   * failed index write must not roll back a receipt. `reindex` heals it.
+   *
+   * `deferIndex` lets a caller posting many receipts do this ONCE for all of
+   * them instead of once each — see `bulkCollect`. The patch rewrites a whole
+   * index shard, so doing it per member meant rewriting the same document over
+   * and over, each write contending with the last.
+   */
+  if (!context.deferIndex) {
+    await patchMemberInIndex(
+      scope.trustId,
+      input.memberId,
+      await readMember(scope, input.memberId),
+    ).catch(() => {});
+  }
 
   return {
     receipts,
@@ -200,6 +223,23 @@ async function postOneReceipt(scope, input, closings, uid, groupCodes = new Map(
     const joinFee = round2(Number(input.joinFeeAmount) || 0);
     if (!applied.accepted.length && joinFee <= 0) {
       return { receipt: null, rejected: applied.rejected };
+    }
+
+    /**
+     * A joining fee can be paid in instalments — ₹2,100 now against ₹11,000 —
+     * so what is accepted here is bounded by what is still outstanding, read
+     * inside this transaction rather than trusted from the form. Two counter
+     * staff taking the last instalment at the same moment is exactly the case
+     * a transaction exists for, and without this check the second one would
+     * take money for a fee that no longer existed.
+     */
+    const fees = joinFeesState(member);
+    if (joinFee > 0 && joinFee > fees.due + 0.009) {
+      throw badRequest(
+        fees.due > 0
+          ? `नामांकन शुल्क में सिर्फ़ ${fees.due} बाकी है — इससे ज़्यादा नहीं लिया जा सकता`
+          : 'नामांकन शुल्क पहले ही पूरा जमा हो चुका है',
+      );
     }
 
     const closingTotal = round2(applied.totalAmount);
@@ -400,12 +440,17 @@ async function postOneReceipt(scope, input, closings, uid, groupCodes = new Map(
       dueAmount: applied.counters.dueAmount,
       lastPaymentAt: input.paidAtMs,
       lastReceiptNo: receiptNo,
-      // `joinFeesDone`, not `joinFeesPaid`. This wrote a second field name for
-      // the same fact, which nothing else read — so paying a joining fee left
-      // the member showing "फीस बाकी" on every screen and in every filter,
-      // for ever. One name.
+      /**
+       * The joining fee is an AMOUNT, not a flag.
+       *
+       * `applyJoinFeePayment` adds this receipt to what the member has already
+       * put down and works out what is left; `joinFeesDone` is set only when
+       * nothing is. Writing `joinFeesDone: true` on any payment — which is
+       * what this did — wrote off ₹8,900 of a ₹11,000 fee the moment somebody
+       * paid the first ₹2,100.
+       */
       ...(joinFee > 0
-        ? { joinFeesDone: true, joinFeesReceiptId: receiptRef.id }
+        ? { ...applyJoinFeePayment(member, joinFee), joinFeesReceiptId: receiptRef.id }
         : {}),
       updatedAt: serverNow(),
       updatedBy: uid,
@@ -554,9 +599,18 @@ export async function cancelPayment(scope, receiptId, { reason, uid }) {
       paidAmount: inc(reversed.counters.paidAmountDelta),
       dueCount: reversed.counters.dueCount,
       dueAmount: reversed.counters.dueAmount,
-      // Cancelling the receipt that paid the joining fee un-pays it, or the
-      // member shows as having paid a fee whose receipt no longer exists.
-      ...(joinFee > 0 ? { joinFeesDone: false, joinFeesReceiptId: null } : {}),
+      /**
+       * Cancelling the receipt that carried a joining fee takes that amount
+       * back off, or the member shows as having paid a fee whose receipt no
+       * longer exists.
+       *
+       * Only THIS receipt's amount is reversed — not the whole fee. A member
+       * who paid ₹2,100 and then ₹3,000 and has the second receipt cancelled
+       * is back to ₹2,100 paid, not to nothing paid.
+       */
+      ...(joinFee > 0
+        ? { ...applyJoinFeePayment(member, -joinFee), joinFeesReceiptId: null }
+        : {}),
       updatedAt: serverNow(),
       updatedBy: uid,
     });
@@ -642,6 +696,243 @@ export async function cancelPayment(scope, receiptId, { reason, uid }) {
   ).catch(() => {});
 
   return result;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Bulk collection — one deposit, many members
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * An agent's round, banked in one go.
+ *
+ * The agent collected from forty members and hands over ₹20,000. Recording
+ * that one member at a time meant forty searches, forty ledgers and forty
+ * submits with the agent standing there, so in practice it did not get
+ * recorded — it got written in a notebook and entered later, or not at all.
+ *
+ * Three things make this safe rather than merely fast:
+ *
+ *  1. **The split is computed from the ledger, never from the browser.** Every
+ *     selected member's dues are re-derived here, from the closings index and
+ *     their own per-closing rate, immediately before the money is placed.
+ *
+ *  2. **Preview and posting run the same function.** `preview: true` returns
+ *     the plan and writes nothing; posting re-computes it from freshly read
+ *     members. Because the operator can edit the figures, what they approved
+ *     is sent back as `byMember` and honoured exactly — but still clamped to
+ *     what each member actually owes.
+ *
+ *  3. **Each member still gets their own receipt**, through `postPayment`,
+ *     with its own transaction, its own number and its own commission entry.
+ *     There is no such thing here as a receipt belonging to several members:
+ *     the person who paid has to be able to hold the paper for their own
+ *     money. What is shared is the deposit, and `batchRef` ties them together.
+ *
+ * One member failing does not abandon the rest. Each is posted independently
+ * and the failures come back named, because the alternative — rolling back
+ * thirty-nine good receipts because the fortieth member was closed an hour
+ * ago — is worse at the counter than a short list to redo.
+ */
+export async function bulkCollect(scope, input) {
+  const { trustId, programId } = scope;
+
+  const memberIds = [...new Set(input.memberIds ?? [])];
+  if (!memberIds.length) throw badRequest('कम से कम एक सदस्य चुनें');
+  if (memberIds.length > LIMITS.BULK_MEMBERS) {
+    throw badRequest(
+      `एक बार में ज़्यादा से ज़्यादा ${LIMITS.BULK_MEMBERS} सदस्य — अभी ${memberIds.length} चुने हैं`,
+    );
+  }
+
+  const [{ items: closings }, groupCodes, snaps] = await Promise.all([
+    getClosingsIndex(trustId, programId),
+    loadGroupCodes(trustId, programId),
+    // One round trip for every selected member, rather than one read each.
+    db.getAll(...memberIds.map((id) => db.doc(paths.member(trustId, id)))),
+  ]);
+
+  const { computeDue } = await import('./ledger.js');
+
+  const rows = [];
+  const missing = [];
+
+  for (const snap of snaps) {
+    if (!snap.exists) {
+      missing.push({ memberId: snap.id, reason: 'सदस्य नहीं मिला' });
+      continue;
+    }
+
+    const member = { id: snap.id, ...snap.data() };
+
+    // A member filed under a different योजना must not be paid from this
+    // programme's counter — their dues belong to another book entirely.
+    if (member.programId !== programId) {
+      missing.push({ memberId: snap.id, name: member.displayName, reason: 'दूसरी योजना का सदस्य' });
+      continue;
+    }
+
+    const due = computeDue(member, closings);
+    const fees = joinFeesState(member);
+
+    rows.push({
+      memberId: member.id,
+      name: member.displayName ?? '',
+      regNo: member.registrationNumber ?? '',
+      phone: member.phone ?? '',
+      village: member.village ?? '',
+      agentId: member.agentId ?? null,
+      agentName: member.agentName ?? '',
+
+      dueCount: due.dueCount,
+      dueTotal: due.dueAmount,
+      due: due.dueItems.map((d) => ({
+        seq: d.seq,
+        remaining: d.remaining,
+        dateMs: d.dateMs,
+        partial: d.partial,
+      })),
+
+      /**
+       * The joining fee is collected on the same round, out of the same
+       * pocket, so it is part of what this deposit can settle. Dated by the
+       * member's joining date, which is what puts it ahead of their closings
+       * — they could not owe a closing from before they joined.
+       */
+      joinFeeTotal: fees.total,
+      joinFeePaid: fees.paid,
+      joinFeeDue: fees.due,
+      joinDateMs: member.joinDateMs ?? 0,
+    });
+  }
+
+  // Keep the operator's order — the "member" rule pays down the list, so the
+  // order they see is the order the money goes in.
+  const position = new Map(memberIds.map((id, i) => [id, i]));
+  rows.sort((a, b) => (position.get(a.memberId) ?? 0) - (position.get(b.memberId) ?? 0));
+
+  const include = input.include ?? 'both';
+
+  const plan = input.byMember
+    ? allocateExplicit(rows, input.byMember, { include })
+    : allocateDeposit(rows, Number(input.amount) || 0, { rule: input.rule, include });
+
+  if (input.preview) {
+    return {
+      preview: true,
+      plan,
+      rows: rows.map(({ due, ...rest }) => rest),
+      missing,
+    };
+  }
+
+  if (!plan.lines.length) {
+    throw badRequest(
+      include === 'fees'
+        ? 'चुने हुए सदस्यों का नामांकन शुल्क बाकी नहीं है'
+        : include === 'closings'
+          ? 'चुने हुए सदस्यों पर कोई क्लोजिंग बकाया नहीं है'
+          : 'बाँटने लायक कुछ नहीं — चुने हुए सदस्यों पर कोई बकाया नहीं है',
+    );
+  }
+
+  /* ─── post, one member at a time ──────────────────────────────────────── */
+
+  const batchRef = input.idempotencyKey || newId();
+  const receipts = [];
+  const failed = [];
+
+  /**
+   * Shared context, read once above rather than per member.
+   *
+   * `deferIndex` is the important one: the search-index patch rewrites a whole
+   * shard document, and doing it inside this loop rewrote the SAME shard once
+   * per member — serially, with every write contending on the one document.
+   * Four members banked together spent most of their time there, not on the
+   * money. One pass at the end does all of them.
+   */
+  const context = { closings, groupCodes, deferIndex: true };
+
+  const postOne = async (line) => {
+    try {
+      const result = await postPayment(scope, {
+        memberId: line.memberId,
+        seqs: line.seqs,
+        amounts: line.amounts,
+        // One receipt carries both: the member's closings and whatever part
+        // of their joining fee this deposit covered.
+        ...(line.joinFee > 0 ? { joinFeeAmount: line.joinFee } : {}),
+        method: input.method,
+        paidAtMs: input.paidAtMs,
+        reference: input.reference ?? '',
+        note: input.note ?? '',
+        collectedByAgentId: input.collectedByAgentId ?? null,
+        // Derived from the batch, so a retried submit returns the receipts
+        // already written instead of taking the money a second time.
+        idempotencyKey: `bulk:${batchRef}:${line.memberId}`,
+      }, context);
+
+      for (const receipt of result.receipts) {
+        receipts.push({ ...receipt, memberName: line.name, regNo: line.regNo });
+      }
+    } catch (error) {
+      failed.push({
+        memberId: line.memberId,
+        name: line.name,
+        regNo: line.regNo,
+        amount: line.total,
+        error: error.message ?? 'नहीं हो सका',
+      });
+    }
+  };
+
+  /**
+   * A few at a time, not one after another and not all at once.
+   *
+   * Each member is an independent transaction on their own documents, so there
+   * is nothing to gain from making them queue — forty members one-by-one is
+   * forty round-trip latencies added up. But they DO share two documents: the
+   * receipt-number counter and the agent's commission totals, and a hundred
+   * transactions contending on those would abort and retry each other into
+   * something slower than the serial version. Six is wide enough to hide the
+   * latency and narrow enough to stay off that cliff.
+   */
+  const CONCURRENCY = 6;
+  for (let i = 0; i < plan.lines.length; i += CONCURRENCY) {
+    await Promise.all(plan.lines.slice(i, i + CONCURRENCY).map(postOne));
+  }
+
+  /* One index pass for everybody who was actually paid. */
+  if (receipts.length) {
+    const paidIds = [...new Set(receipts.map((r) => r.memberId))];
+    await Promise.all(paidIds.map((id) => readMember(scope, id)))
+      .then((docs) =>
+        patchMembersInIndex(
+          trustId,
+          docs.map((m, i) => ({ id: paidIds[i], member: m })).filter((x) => x.member),
+        ),
+      )
+      .catch(() => {});
+  }
+
+  const collected = round2(receipts.reduce((s, r) => s + (Number(r.totalAmount) || 0), 0));
+
+  return {
+    batchRef,
+    receipts,
+    receiptCount: receipts.length,
+    memberCount: plan.lines.length - failed.length,
+    collected,
+    /** Of what was banked, how much went to joining fees rather than closings. */
+    feeCollected: round2(
+      receipts.reduce((s, r) => s + (Number(r.joinFeeAmount) || 0), 0),
+    ),
+    /** What the operator meant to bank, so a shortfall is visible at a glance. */
+    intended: plan.allocated,
+    shortfall: round2(plan.allocated - collected),
+    leftover: plan.leftover,
+    failed,
+    missing,
+  };
 }
 
 /* ══════════════════════════════════════════════════════════════════════════

@@ -105,7 +105,7 @@ export default function CommissionPage() {
               description={
                 <Space direction="vertical" size={2}>
                   <Text>
-                    {t('जॉइनिंग फीस')}:{' '}
+                    {t('नामांकन शुल्क')}:{' '}
                     {policy.joinFee?.enabled
                       ? `${policy.joinFee.value}${policy.joinFee.mode === 'percent' ? '%' : ' ₹'} (${policy.joinFee.mode})`
                       : t('बंद')}
@@ -164,7 +164,7 @@ export default function CommissionPage() {
                   width: 120,
                   render: (v) => (
                     <Tag color={v === 'join_fee' ? 'blue' : 'green'}>
-                      {v === 'join_fee' ? t('जॉइनिंग') : t('वसूली')}
+                      {v === 'join_fee' ? t('शुल्क') : t('वसूली')}
                     </Tag>
                   ),
                 },

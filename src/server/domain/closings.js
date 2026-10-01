@@ -4,12 +4,13 @@ import { db, serverNow, inc, countQuery } from '../firebase/admin.js';
 import { reversePayment } from './ledger.js';
 import {
   getClosingsIndex,
+  getMembersIndex,
   appendClosingToIndex,
   patchClosingInIndex,
   rebuildClosingsIndex,
 } from './indexes.js';
-import { resolveBatch, bumpBatch } from './closingBatches.js';
-import { getMembersIndex } from './indexes.js';
+import { resolveBatch, bumpBatch, setClosingBatch } from './closingBatches.js';
+
 import { eligibleForClosing } from '../../lib/closingEligibility.js';
 import { badRequest, conflict, notFound } from '../http.js';
 import { assertSameProgram } from './scope.js';
@@ -623,4 +624,110 @@ function summariseBands(rows) {
   return [...map.values()].sort(
     (a, b) => (parseInt(a.band, 10) || 999) - (parseInt(b.band, 10) || 999),
   );
+}
+
+/**
+ * Edit a closing after the fact.
+ *
+ * The old system let an operator reopen a closed case and correct the date,
+ * the notes, the invitation card and the group. This system could create a
+ * closing and revert one, and nothing in between — so a card scanned upside
+ * down, or a date typed as 08 instead of 03, meant reverting the whole thing
+ * (unwinding every payment against it) and closing the member again.
+ *
+ * The closing DATE is editable and that is not a small thing: it is the single
+ * field eligibility is decided by, so changing it changes who owes this
+ * closing. That is exactly why it must be editable — a wrong date silently
+ * bills the wrong people — and exactly why it is recomputed and re-snapshotted
+ * here rather than patched in place.
+ */
+export async function updateClosing(scope, closingId, input) {
+  const { trustId, programId, uid } = scope;
+
+  const ref = db.doc(paths.closing(trustId, programId, closingId));
+  const snap = await ref.get();
+  if (!snap.exists) throw notFound('क्लोजिंग नहीं मिली');
+
+  const closing = snap.data();
+  if (closing.status === CLOSING_STATUS.REVERTED) {
+    throw conflict('वापस ली गई क्लोजिंग संपादित नहीं की जा सकती');
+  }
+
+  const patch = { updatedAt: serverNow(), updatedBy: uid };
+
+  for (const field of ['closingDate', 'closingType', 'notes', 'invitationCardURL']) {
+    if (input[field] !== undefined) patch[field] = input[field];
+  }
+
+  /** The money on the समापन पत्र — what the family was handed, and against what. */
+  if (input.payout) {
+    patch.payout = {
+      ...(closing.payout ?? {}),
+      ...input.payout,
+    };
+  }
+
+  /* ── the date, and everything that follows from it ──────────────────── */
+
+  const newDateMs = Number(input.closingDateMs);
+  const dateChanged =
+    Number.isFinite(newDateMs) && newDateMs !== Number(closing.closingDateMs);
+
+  if (dateChanged) {
+    const memberRef = db.doc(paths.member(trustId, closing.memberId));
+    const memberSnap = await memberRef.get();
+
+    if (memberSnap.exists && newDateMs < Number(memberSnap.data().joinDateMs ?? 0)) {
+      throw badRequest('क्लोजिंग की तारीख़ सदस्य के जुड़ने से पहले नहीं हो सकती');
+    }
+
+    patch.closingDateMs = newDateMs;
+
+    // The eligibility snapshot was taken against the old date and is now a
+    // statement about a day that no longer applies to this closing.
+    const eligible = eligibleForClosing((await getMembersIndex(trustId)).items, {
+      programId,
+      closingDateMs: newDateMs,
+      exceptMemberId: closing.memberId,
+      includeBlocked: closing.includeBlocked !== false,
+    });
+
+    patch.eligibleCount = eligible.count;
+    patch.eligibleAmount = eligible.amount;
+    patch.eligibleByBand = eligible.byBand;
+    patch.amountPerMember = eligible.typicalAmount;
+
+    /**
+     * The member's own exit date moves with it.
+     *
+     * `exitDateMs` is what stops a closed member being billed for closings
+     * that happen after them. Leaving it on the old date would make this
+     * member owe — or stop owing — a fortnight's worth of other closings, for
+     * no reason anybody could see.
+     */
+    if (memberSnap.exists) {
+      await memberRef.update({
+        closingDateMs: newDateMs,
+        exitDateMs: newDateMs,
+        updatedAt: serverNow(),
+        updatedBy: uid,
+      });
+    }
+  }
+
+  /* ── the batch ──────────────────────────────────────────────────────── */
+
+  if (input.batchId !== undefined && (input.batchId ?? null) !== (closing.batchId ?? null)) {
+    // Reuses the same path the batch screen uses, so the counters and the
+    // index stay correct however the move was made.
+    await setClosingBatch(scope, input.batchId ?? null, [closingId]);
+  }
+
+  await ref.update(patch);
+
+  if (dateChanged) {
+    await patchClosingInIndex(trustId, programId, closingId, { dateMs: newDateMs });
+  }
+
+  return { id: closingId, ...closing, ...patch, updatedAt: null };
 }

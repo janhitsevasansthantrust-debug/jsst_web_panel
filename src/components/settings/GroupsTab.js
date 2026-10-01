@@ -63,7 +63,7 @@ export default function GroupsTab() {
           { title: t('नाम'), dataIndex: 'name' },
           { title: t('विवरण'), dataIndex: 'description' },
           { title: t('प्रति क्लोजिंग'), dataIndex: 'payAmount', width: 140, render: (v) => inr(v) },
-          { title: t('जॉइनिंग फीस'), dataIndex: 'joinFees', width: 140, render: (v) => inr(v) },
+          { title: t('नामांकन शुल्क'), dataIndex: 'joinFees', width: 140, render: (v) => inr(v) },
           { title: t('सदस्य'), dataIndex: 'memberCount', width: 90, align: 'right' },
         ]}
       />
@@ -97,7 +97,7 @@ export default function GroupsTab() {
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="joinFees" label={t('जॉइनिंग फीस')}>
+              <Form.Item name="joinFees" label={t('नामांकन शुल्क')}>
                 <InputNumber min={0} prefix="₹" style={{ width: '100%' }} />
               </Form.Item>
             </Col>

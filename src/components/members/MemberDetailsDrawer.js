@@ -15,6 +15,7 @@ import {
 import { api, keys } from '../../lib/api.js';
 import { inr } from '../ui/DataGrid.js';
 import { statusLabel, statusColor, hiDate } from '../../lib/memberStatus.js';
+import { joinFeesState } from '../../lib/joinFees.js';
 import { MEMBER_STATUS } from '../../config/constants.js';
 import { useT } from '../../i18n/index.js';
 
@@ -261,11 +262,35 @@ export default function MemberDetailsDrawer({ memberId, open, onClose, onEdit })
               <Descriptions.Item label={t('प्रति क्लोजिंग राशि')}>
                 {inr(member.payAmount)}
               </Descriptions.Item>
-              <Descriptions.Item label={t('जॉइनिंग फीस')}>
-                {inr(member.joinFees)}{' '}
-                <Tag color={member.joinFeesDone ? 'green' : 'orange'}>
-                  {member.joinFeesDone ? t('जमा') : t('बाकी')}
-                </Tag>
+              {/*
+                The fee, and how much of it has actually arrived.
+                A single green/orange tag could not describe a member who has
+                paid ₹2,100 of ₹11,000 — it called them either paid up or
+                owing everything, and both were wrong.
+              */}
+              <Descriptions.Item label={t('नामांकन शुल्क')}>
+                {(() => {
+                  const f = joinFeesState(member);
+                  if (f.total <= 0) return <Text type="secondary">{t('कोई शुल्क नहीं')}</Text>;
+                  return (
+                    <Space size={6} wrap>
+                      <Text strong>{inr(f.total)}</Text>
+                      {f.done ? (
+                        <Tag color="green">{t('पूरा जमा')}</Tag>
+                      ) : f.partial ? (
+                        <>
+                          <Tag color="orange">{t('आंशिक')}</Tag>
+                          <Text type="secondary">
+                            {t('जमा {p} · बाकी', { p: inr(f.paid) })}{' '}
+                            <Text strong style={{ color: 'var(--due)' }}>{inr(f.due)}</Text>
+                          </Text>
+                        </>
+                      ) : (
+                        <Tag color="red">{t('बाकी')}</Tag>
+                      )}
+                    </Space>
+                  );
+                })()}
               </Descriptions.Item>
             </Descriptions>
           </Col>
@@ -426,15 +451,32 @@ function LedgerTab({ data }) {
         </Col>
         <Col xs={12} md={6}>
           <Card size="small">
-            <Statistic
-              title={t('जमा')}
-              value={inr(data.settled.amount)}
-              valueStyle={{ color: 'var(--paid)', fontSize: 20 }}
-            />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {data.settled.count} {t('क्लोजिंग')}
-              {data.settled.exemptCount ? ` · ${t('{n} छूट', { n: data.settled.exemptCount })}` : ''}
-            </Text>
+            {/*
+              Everything the member has handed over, not only their closings.
+              `settled.amount` is the ledger's figure and counts closings alone,
+              so somebody who had paid ₹2,100 towards their joining fee and owed
+              no closing was shown "जमा ₹0" — which is not a rounding problem,
+              it is the wrong answer to the question the card asks.
+            */}
+            {(() => {
+              const feePaid = joinFeesState(data.member).paid;
+              return (
+                <>
+                  <Statistic
+                    title={t('जमा')}
+                    value={inr((data.settled.amount ?? 0) + feePaid)}
+                    valueStyle={{ color: 'var(--paid)', fontSize: 20 }}
+                  />
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    {data.settled.count} {t('क्लोजिंग')}
+                    {data.settled.exemptCount
+                      ? ` · ${t('{n} छूट', { n: data.settled.exemptCount })}`
+                      : ''}
+                    {feePaid > 0 ? ` · ${t('शुल्क {f}', { f: inr(feePaid) })}` : ''}
+                  </Text>
+                </>
+              );
+            })()}
           </Card>
         </Col>
         <Col xs={12} md={6}>

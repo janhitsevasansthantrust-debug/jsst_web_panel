@@ -69,6 +69,20 @@ export function filterMembers(items, filters = {}) {
     if (filters.feeDone === true && !m.feeDone) continue;
     if (filters.feeDone === false && m.feeDone) continue;
 
+    /**
+     * Owes something — a closing, a joining fee, or either.
+     *
+     * `hasDue` has always meant closings only. A member whose only debt is
+     * half a joining fee is invisible to it, which is exactly the member the
+     * bulk-collection screen is looking for, so "owes anything" needs a
+     * question of its own rather than a redefinition of the old one.
+     */
+    if (filters.hasFeeDue === true && !(feeDueOf(m) > 0)) continue;
+    if (filters.hasFeeDue === false && feeDueOf(m) > 0) continue;
+
+    if (filters.owesAnything === true
+      && !((m.dueC ?? 0) > 0 || feeDueOf(m) > 0)) continue;
+
     if (minDue != null && !((m.due ?? 0) >= minDue)) continue;
 
     const score = scoreMember(m, q);
@@ -201,15 +215,46 @@ export function summarise(items) {
   let paid = 0;
   let withDue = 0;
   let feePending = 0;
+  let feeDueAmount = 0;
+  let feePaidAmount = 0;
+  let feePartial = 0;
 
   for (const m of items) {
     due += m.due ?? 0;
     paid += m.paid ?? 0;
     if ((m.dueC ?? 0) > 0) withDue += 1;
-    if (!m.feeDone) feePending += 1;
+
+    /**
+     * The joining fee in money, not only in headcount.
+     *
+     * `feePending` counted members whose fee was not fully settled, which
+     * cannot answer "how much joining-fee money is outstanding" — the question
+     * anybody actually asks. A member owing ₹400 and one owing ₹11,000 both
+     * counted as 1.
+     */
+    const feeLeft = feeDueOf(m);
+    const feeIn = m.feePaid != null
+      ? (Number(m.feePaid) || 0)
+      : (m.feeDone ? (Number(m.fee) || 0) : 0);
+
+    feeDueAmount += feeLeft;
+    feePaidAmount += feeIn;
+    if (feeLeft > 0) feePending += 1;
+    if (feeLeft > 0 && feeIn > 0) feePartial += 1;
   }
 
-  return { count: items.length, dueAmount: due, paidAmount: paid, withDue, feePending };
+  return {
+    count: items.length,
+    dueAmount: due,
+    paidAmount: paid,
+    withDue,
+    /** Members with any part of their joining fee still outstanding. */
+    feePending,
+    /** Of those, the ones who have paid something towards it. */
+    feePartial,
+    feeDueAmount: Math.round(feeDueAmount * 100) / 100,
+    feePaidAmount: Math.round(feePaidAmount * 100) / 100,
+  };
 }
 
 /* ── paging ──────────────────────────────────────────────────────────────── */
@@ -232,6 +277,17 @@ export function paginate(items, { page = 1, limit = 50 } = {}) {
 /* ── grouped counts ──────────────────────────────────────────────────────── */
 
 /** How each entry is bucketed, and what the bucket is called. */
+/**
+ * What is left of a member's joining fee.
+ *
+ * Index entries written before the amount was tracked carry only `feeDone`,
+ * so that boolean stands in: paid means nothing left, unpaid means all of it.
+ */
+function feeDueOf(m) {
+  if (m.feeDue != null) return Number(m.feeDue) || 0;
+  return m.feeDone ? 0 : (Number(m.fee) || 0);
+}
+
 const GROUPERS = {
   status: (m) => [m.status, m.status],
   agent: (m) => [m.agentId ?? '_none', m.agent || 'सीधे जोड़ा गया'],

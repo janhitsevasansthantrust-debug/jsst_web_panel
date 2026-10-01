@@ -422,6 +422,85 @@ export async function patchMemberInIndex(trustId, memberId, member) {
   invalidateMembersIndexCache(trustId);
 }
 
+/**
+ * Update MANY members inside the index in one pass.
+ *
+ * `patchMemberInIndex` is right for one member and wrong for forty. Each call
+ * reads the head, then runs a transaction per shard until it finds its member
+ * — and each of those transactions reads a whole shard document (up to a few
+ * hundred kilobytes) and writes the entire thing back. Called in a loop it
+ * rewrites the SAME shard once per member, serially, and because every one of
+ * those writes contends on the same document Firestore makes them queue and
+ * retry. Four members banked together spent most of their time here.
+ *
+ * This reads the head once and touches each shard once, applying every member
+ * that lives in it inside a single transaction. Forty members in one shard is
+ * one read and one write instead of forty of each.
+ *
+ * Members not found anywhere are returned rather than inserted: this is the
+ * path taken after a payment, where the member certainly exists in the index
+ * already, and quietly appending them to the last shard would hide a real
+ * inconsistency. The caller can fall back to the single-member path, which
+ * does handle insertion.
+ *
+ * @param {string} trustId
+ * @param {Array<{id:string, member:object}>} members
+ * @returns {Promise<{updated:number, missing:string[]}>}
+ */
+export async function patchMembersInIndex(trustId, members) {
+  const list = (members ?? []).filter((m) => m?.id && m.member);
+  if (!list.length) return { updated: 0, missing: [] };
+  if (list.length === 1) {
+    await patchMemberInIndex(trustId, list[0].id, list[0].member);
+    return { updated: 1, missing: [] };
+  }
+
+  const headRef = db.doc(paths.membersIndexShard(trustId, 0));
+  const head = await headRef.get();
+  if (!head.exists) return { updated: 0, missing: list.map((m) => m.id) };
+
+  const shardCount = head.data().shardCount ?? 1;
+
+  const pending = new Map(list.map((m) => [m.id, toMemberEntry(m.id, m.member)]));
+  let updated = 0;
+
+  for (let n = 0; n < shardCount && pending.size; n += 1) {
+    const ref = db.doc(paths.membersIndexShard(trustId, n));
+
+    const applied = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return [];
+
+      const items = snap.data().items ?? [];
+      const hit = [];
+
+      // One scan of the shard for all of them, rather than one scan each.
+      const at = new Map();
+      for (let i = 0; i < items.length; i += 1) at.set(items[i].id, i);
+
+      for (const [id, entry] of pending) {
+        const i = at.get(id);
+        if (i !== undefined) {
+          items[i] = entry;
+          hit.push(id);
+        }
+      }
+
+      if (!hit.length) return [];
+
+      tx.update(ref, { items, version: Date.now(), updatedAt: serverNow() });
+      return hit;
+    });
+
+    for (const id of applied) pending.delete(id);
+    updated += applied.length;
+  }
+
+  if (updated) invalidateMembersIndexCache(trustId);
+
+  return { updated, missing: [...pending.keys()] };
+}
+
 /** Start a new shard and publish it by raising the head's `shardCount`. */
 async function openShard(trustId, n, entry) {
   const batch = db.batch();

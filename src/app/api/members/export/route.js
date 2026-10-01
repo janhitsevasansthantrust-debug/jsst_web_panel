@@ -111,7 +111,10 @@ function describe(f) {
   }
   if (f.hasDue === true) out.push('सिर्फ़ बकायादार');
   if (f.hasDue === false) out.push('कोई बकाया नहीं');
-  if (f.feeDone === false) out.push('जॉइनिंग फीस बाकी');
+  if (f.feeDone === false) out.push('नामांकन शुल्क बाकी');
+  if (f.hasFeeDue === true) out.push('सिर्फ़ जिनका नामांकन शुल्क बाकी है');
+  if (f.hasFeeDue === false) out.push('नामांकन शुल्क पूरा जमा');
+  if (f.owesAnything === true) out.push('कुछ भी बकाया (क्लोजिंग या शुल्क)');
   if (f.allPrograms) out.push('सभी योजनाएँ');
 
   return out;

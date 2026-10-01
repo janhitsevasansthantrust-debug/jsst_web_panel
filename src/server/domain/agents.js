@@ -28,7 +28,16 @@ export async function listAgents(scope, { includeInactive = false } = {}) {
 
   const snap = await query.orderBy('displayName', 'asc').limit(500).get();
 
-  const agents = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  /**
+   * `isSelf` exists so the screen can refuse to let you reset, disable or hand
+   * over your OWN login from the agents table. An agent document whose `uid` is
+   * the caller's own is not a hypothetical — see the guard in `createAgent`.
+   */
+  const agents = snap.docs.map((d) => ({
+    id: d.id,
+    ...d.data(),
+    isSelf: d.data().uid === scope.uid,
+  }));
 
   const summary = agents.reduce(
     (acc, a) => ({
@@ -88,6 +97,33 @@ export async function createAgent(scope, input) {
     const claims = authUser.customClaims ?? {};
     if (claims.trustId && claims.trustId !== trustId) {
       throw conflict('यह ईमेल किसी दूसरे ट्रस्ट में पहले से उपयोग हो रहा है');
+    }
+
+    /**
+     * Adopting an account is only safe when that account is nobody yet, or is
+     * already an agent.
+     *
+     * Everything below this point rewrites the account: it sets the password,
+     * overwrites the custom claims with `role: AGENT`, and writes an agent
+     * document whose id IS this uid. Run that against your own admin login and
+     * you demote yourself — the agents list then 403s for you, and the key icon
+     * on that row resets your own password and revokes your own session, which
+     * looks exactly like the agent vanishing.
+     *
+     * The trust check above does not catch it, because your admin account is in
+     * THIS trust. So the account's role has to be checked as well as its trust.
+     */
+    if (authUser.uid === uid) {
+      throw conflict(
+        'यह आपका ही लॉगिन ईमेल है। अपने ईमेल से एजेंट नहीं बन सकता — ' +
+          'एजेंट के लिए अलग ईमेल डालें।',
+      );
+    }
+
+    if (claims.role && claims.role !== ROLE.AGENT) {
+      throw conflict(
+        `यह ईमेल पहले से इस सिस्टम के ${claims.role} खाते का है — एजेंट के लिए अलग ईमेल डालें।`,
+      );
     }
     await adminAuth.updateUser(authUser.uid, {
       password,
@@ -194,6 +230,30 @@ function generatePassword() {
  *  • **Deactivating** must reach Auth too. A `active: false` document with a
  *    working login is not a deactivated agent.
  */
+/**
+ * Refuse to operate on the caller's own login through the agents screen.
+ *
+ * Three things here reach into Firebase Auth with `agent.uid`: a password reset,
+ * switching an agent off (`disabled: true`), and a handover. All three are
+ * correct against an agent and catastrophic against yourself, because
+ * `verifySessionCookie` is checked for revocation — so revoking or disabling
+ * your own account ends your session on the very next request, with no error
+ * anybody can read. The screen goes blank and the row is gone.
+ *
+ * Normally no agent document carries your uid at all. It can happen when an
+ * agent was created with an email that already had an account, which is now
+ * refused in `createAgent` — this is the second lock on the same door, for rows
+ * that already exist.
+ */
+function assertNotSelf(scope, agent, action) {
+  if (agent.uid && agent.uid === scope.uid) {
+    throw conflict(
+      `यह एजेंट आपका ही लॉगिन खाता है, इसलिए ${action} यहाँ से नहीं हो सकता — ` +
+        'वरना आप खुद तुरंत लॉग आउट हो जाएँगे। अपना पासवर्ड सेटिंग से बदलें।',
+    );
+  }
+}
+
 export async function updateAgent(scope, agentId, patch) {
   const ref = db.doc(paths.agent(scope.trustId, agentId));
   const snap = await ref.get();
@@ -244,6 +304,7 @@ export async function updateAgent(scope, agentId, patch) {
 
   /* ── active: the document flag alone stops nothing ───────────────────── */
   if (patch.active !== undefined && patch.active !== before.active) {
+    if (patch.active === false) assertNotSelf(scope, before, 'बंद करना');
     await adminAuth.updateUser(before.uid, { disabled: patch.active === false });
     if (patch.active === false) await adminAuth.revokeRefreshTokens(before.uid);
   }
@@ -321,11 +382,25 @@ export async function resetAgentPassword(scope, agentId) {
   const snap = await db.doc(paths.agent(scope.trustId, agentId)).get();
   if (!snap.exists) throw notFound('एजेंट नहीं मिला');
 
-  const password = generatePassword();
-  await adminAuth.updateUser(snap.data().uid, { password });
-  await adminAuth.revokeRefreshTokens(snap.data().uid);
+  const agent = snap.data();
+  assertNotSelf(scope, agent, 'पासवर्ड बदलना');
 
-  return { password, email: snap.data().email };
+  if (!agent.uid) {
+    throw badRequest(
+      'इस एजेंट का लॉगिन खाता नहीं है, इसलिए पासवर्ड बनाया नहीं जा सकता — ' +
+        'इन्हें संपादित करके ईमेल डालें।',
+    );
+  }
+
+  const password = generatePassword();
+  await adminAuth.updateUser(agent.uid, { password });
+
+  // Revocation is the point: without it the old password stays usable
+  // alongside the new one. `verifySessionCookie(cookie, true)` honours it, so
+  // this agent is signed out of every device within the same request.
+  await adminAuth.revokeRefreshTokens(agent.uid);
+
+  return { password, email: agent.email };
 }
 
 /**
@@ -362,6 +437,8 @@ export async function handoverAgent(scope, agentId, input) {
   if (!snap.exists) throw notFound('एजेंट नहीं मिला');
 
   const before = snap.data();
+  assertNotSelf(scope, before, 'पद किसी और को देना');
+
   const email = String(input.email).trim().toLowerCase();
 
   if (email === String(before.email ?? '').toLowerCase()) {

@@ -147,3 +147,19 @@ test('an export of nothing is still a valid file, not a broken one', () => {
   const csv = toCsv([]).replace('﻿', '');
   assert.equal(csv.split('\r\n').filter(Boolean).length, 1);
 });
+
+test('कुल जमा adds the joining fee to the closings total', () => {
+  const col = EXPORT_COLUMNS.find((c) => c.key === 'totalPaid');
+  assert.ok(col, 'the कुल जमा column exists');
+
+  // A member who owes no closing but has part-paid their fee used to read ₹0.
+  assert.equal(cellValue({ paidAmount: 0, joinFeesPaid: 2100 }, col), 2100);
+  assert.equal(cellValue({ paidAmount: 800, joinFeesPaid: 2100 }, col), 2900);
+  assert.equal(cellValue({ paidAmount: 800 }, col), 800);
+  assert.equal(cellValue({}, col), 0);
+});
+
+test('the closings column is no longer labelled as everything', () => {
+  const col = EXPORT_COLUMNS.find((c) => c.key === 'paidAmount');
+  assert.equal(col.header, 'क्लोजिंग जमा');
+});

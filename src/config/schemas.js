@@ -5,6 +5,7 @@ import {
   MEMBER_STATUS,
   PAYMENT_METHOD,
   COMMISSION_MODE,
+  LIMITS,
   ROLE,
 } from './constants.js';
 
@@ -56,7 +57,17 @@ const seq = z.coerce.number().int().positive();
 export const paginationQuery = z.object({
   cursor: z.string().optional(),
   page: z.coerce.number().int().min(1).optional(),
-  limit: z.coerce.number().int().min(1).max(100).optional(),
+  /**
+   * The ceiling comes from `LIMITS.MAX_PAGE_SIZE`, not from a number typed
+   * here.
+   *
+   * It used to be a literal 100 while `LIMITS.MAX_PAGE_SIZE` said 200, and
+   * every route clamped with the constant — so a request for 200 was clamped
+   * to 200 by the handler and then rejected by this schema before the handler
+   * ever ran. Two caps that disagree means the stricter one wins silently and
+   * the documented one is a lie.
+   */
+  limit: z.coerce.number().int().min(1).max(LIMITS.MAX_PAGE_SIZE).optional(),
   sortBy: z.string().optional(),
   sortDir: z.enum(['asc', 'desc']).optional(),
 });
@@ -149,6 +160,18 @@ export const memberCreate = z.object({
 
   // नामांकन शुल्क
   joinFeesDone: z.boolean().optional().default(false),
+  /**
+   * How much of the joining fee is being handed over right now.
+   *
+   * Separate from `joinFeesDone` because a fee is not all-or-nothing: a member
+   * whose band charges ₹11,000 may put down ₹2,100 at the desk and the rest
+   * over the following months. Absent (with `joinFeesDone` ticked) still means
+   * the whole fee, so older callers keep working.
+   *
+   * Capped server-side at the member's real fee — the band decides the total,
+   * not the form.
+   */
+  joinFeesPaidNow: money.optional(),
   joinFeesTxtId: optionalText(80),
   /**
    * How the joining fee was taken.
@@ -230,6 +253,10 @@ export const memberListQuery = paginationQuery.extend({
 
   hasDue: boolFlag,
   feeDone: boolFlag,
+  /** Part or all of the joining fee still outstanding. */
+  hasFeeDue: boolFlag,
+  /** A closing OR a joining fee outstanding — anything at all. */
+  owesAnything: boolFlag,
   minDue: z.coerce.number().min(0).optional(),
 
   groupId: z.string().optional(),
@@ -286,6 +313,45 @@ export const closingCreate = z.object({
 });
 
 /**
+ * The money on the समापन पत्र — what the family was handed, and against what.
+ *
+ * Stored on the closing rather than computed at print time: the moment the
+ * वारिसदार signs, that is what the paper said, and a reprint six months later
+ * — after more members have paid — must not show a different figure from the
+ * signed copy.
+ */
+export const closingPayout = z.object({
+  /** Collected against this closing so far. Seeded from the counter, then fixed. */
+  memberContributed: money.optional(),
+  membersCount: z.coerce.number().int().min(0).max(1_000_000).optional(),
+  /** What the trust is handing over. */
+  amountGiven: money.optional(),
+  paymentMode: optionalText(40),
+  /** This member's own arrears, deducted from what they receive. */
+  oldPending: money.optional(),
+  netAmount: money.optional(),
+  payoutDate: optionalText(20),
+});
+
+/**
+ * Correcting a closing after the fact.
+ *
+ * The date is editable and that is not a small thing — it is the one field
+ * eligibility is decided by. Which is exactly why it must be: a wrong date
+ * silently bills the wrong people, and the only alternative was reverting the
+ * whole case and closing the member again.
+ */
+export const closingUpdate = z.object({
+  closingDate: optionalText(20).optional(),
+  closingDateMs: dateMs.optional(),
+  closingType: z.enum(Object.values(CLOSING_TYPE)).optional(),
+  notes: optionalText(1000).optional(),
+  invitationCardURL: z.string().url().optional().or(z.literal('')),
+  batchId: z.string().optional().nullable(),
+  payout: closingPayout.optional(),
+});
+
+/**
  * क्लोजिंग समूह — the batch a month's closings are billed on.
  *
  * `code` is accepted on create only. It is printed inside every receipt number
@@ -318,6 +384,42 @@ export const closingRevert = z.object({
 });
 
 /* ── payments ────────────────────────────────────────────────────────────── */
+
+/**
+ * One deposit split across many members.
+ *
+ * `amount` with a `rule` is the automatic split; `byMember` is the operator's
+ * hand-edited version of it, which wins when present. Both are clamped
+ * server-side to what each member actually owes — the browser proposes, the
+ * ledger disposes.
+ */
+export const bulkCollectInput = z.object({
+  memberIds: z.array(z.string().min(1)).min(1).max(500),
+
+  amount: money.optional(),
+  rule: z.enum(['member', 'oldest']).optional().default('member'),
+  /** What this deposit is allowed to settle. */
+  include: z.enum(['both', 'closings', 'fees']).optional().default('both'),
+  /** memberId → amount, when the operator has adjusted the split. */
+  byMember: z.record(z.string(), money).optional(),
+
+  method: z.enum(Object.values(PAYMENT_METHOD)),
+  paidAtMs: dateMs,
+  reference: optionalText(80),
+  note: optionalText(500),
+
+  collectedByAgentId: z.string().optional().nullable(),
+
+  /** True returns the split without writing anything. */
+  preview: z.boolean().optional().default(false),
+  idempotencyKey: z.string().trim().max(120).optional(),
+}).refine(
+  (v) => v.byMember !== undefined || (v.amount ?? 0) > 0,
+  { message: 'राशि डालें', path: ['amount'] },
+).refine(
+  (v) => v.preview || v.method !== PAYMENT_METHOD.ONLINE || Boolean(v.reference),
+  { message: 'An online payment needs a reference number', path: ['reference'] },
+);
 
 export const paymentCreate = z.object({
   memberId: z.string().min(1),

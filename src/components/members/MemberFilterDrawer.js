@@ -199,19 +199,31 @@ export default function MemberFilterDrawer({
         />
       </Section>
 
-      <Section label={t('जॉइनिंग फीस')}>
+      {/*
+        ONE control for the enrolment fee, not two.
+        A second section used to sit below this one asking the same thing
+        through `feeDone`, the old boolean — and the two could disagree, because
+        `feeDone` cannot see a part-payment at all. Two controls for one
+        question is how a filter bar starts contradicting itself. `feeDone`
+        still works as a URL parameter for any link somebody saved; nothing
+        offers it any more.
+      */}
+      <Section
+        label={t('नामांकन शुल्क')}
+        hint={t('आंशिक जमा वाले भी "बाकी है" में आते हैं — जिनका एक रुपया भी बाकी है')}
+      >
         <Radio.Group
           optionType="button"
           buttonStyle="solid"
           size="small"
-          value={filters.feeDone ?? 'any'}
+          value={filters.hasFeeDue ?? 'any'}
           onChange={(e) =>
-            set({ feeDone: e.target.value === 'any' ? undefined : e.target.value })
+            set({ hasFeeDue: e.target.value === 'any' ? undefined : e.target.value })
           }
           options={[
             { label: t('कोई भी'), value: 'any' },
-            { label: t('जमा'), value: true },
-            { label: t('बाकी'), value: false },
+            { label: t('बाकी है'), value: true },
+            { label: t('पूरा जमा'), value: false },
           ]}
         />
       </Section>
