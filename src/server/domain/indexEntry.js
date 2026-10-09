@@ -19,12 +19,25 @@
  */
 export const MEMBER_INDEX_FIELDS = [
   'registrationNumber', 'displayName', 'fatherName', 'phone', 'phoneAlt',
-  'aadhaarNo', 'village', 'district', 'state', 'gender', 'jati',
+  'aadhaarNo', 'village', 'district', 'gender', 'jati',
   'ageGroupRange', 'age', 'status', 'agentId', 'agentName', 'programId',
   'programName', 'joinDateMs', 'bobDateMs', 'payAmount', 'joinFees',
   'joinFeesDone', 'joinFeesPaid', 'joinFeesDue',
   'dueCount', 'dueAmount', 'paidCount', 'paidAmount',
-  'lastPaymentAt', 'photoURL', 'delete_flag',
+  'lastPaymentAt', 'photoURL',
+  /**
+   * The dates and the ledger, so the whole index can answer "who owes what"
+   * without a read per member. A member who is closed still owes every other
+   * member's closing up to and including their own closing date, and that is
+   * decided entirely from here — if these four went missing, every closed
+   * member would silently owe nothing at all.
+   */
+  'exitDateMs', 'exitReason', 'closingDateMs', 'closingId',
+  'paidUpTo', 'paidSeqs', 'exemptSeqs', 'partialPaid',
+  // `state` and `delete_flag` were listed here and mapped nowhere: the state is
+  // fixed by the district, and a deleted member is never put in the index at
+  // all (the rebuild queries `delete_flag == false`). Carrying a field nobody
+  // can read costs 5,000 entries' worth of storage for nothing.
 ];
 
 /**
@@ -56,6 +69,14 @@ export function toMemberEntry(id, m) {
     pid: m.programId ?? '',
     prog: m.programName ?? '',
     joinMs: m.joinDateMs ?? null,
+    exitMs: m.exitDateMs ?? null,
+    exitReason: m.exitReason ?? null,
+    closeMs: m.closingDateMs ?? null,
+    closingId: m.closingId ?? null,
+    upTo: m.paidUpTo ?? 0,
+    seqs: m.paidSeqs ?? [],
+    exempt: m.exemptSeqs ?? [],
+    partial: m.partialPaid ?? {},
     dobMs: m.bobDateMs ?? null,
     pay: m.payAmount ?? 0,
     fee: m.joinFees ?? 0,
@@ -106,6 +127,14 @@ export function fromMemberEntry(e) {
     programId: e.pid,
     programName: e.prog,
     joinDateMs: e.joinMs,
+    exitDateMs: e.exitMs ?? null,
+    exitReason: e.exitReason ?? null,
+    closingDateMs: e.closeMs ?? null,
+    closingId: e.closingId ?? null,
+    paidUpTo: e.upTo ?? 0,
+    paidSeqs: e.seqs ?? [],
+    exemptSeqs: e.exempt ?? [],
+    partialPaid: e.partial ?? {},
     bobDateMs: e.dobMs,
     payAmount: e.pay,
     joinFees: e.fee,

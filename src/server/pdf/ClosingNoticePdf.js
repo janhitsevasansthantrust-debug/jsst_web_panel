@@ -27,7 +27,9 @@ import { DEFAULT_PRIMARY, DEFAULT_ACCENT } from '../../lib/theme.js';
  * read by people who knew the family, and "राम कुमार" alone identifies four of
  * them in any large trust.
  */
-export function ClosingNoticePdf({ trust, program, batch, rows, perMemberAmount }) {
+export function ClosingNoticePdf({
+  trust, program, batch, rows, perMemberAmount, closedMemberCardURL,
+}) {
   const b = trust?.branding ?? {};
   const primary = b.theme?.primary || DEFAULT_PRIMARY;
   const accent = b.theme?.accent || DEFAULT_ACCENT;
@@ -117,14 +119,24 @@ export function ClosingNoticePdf({ trust, program, batch, rows, perMemberAmount 
           <Text style={s.description}>{batch.description}</Text>
         ) : null}
 
-        {/* The invitation card, where the trust attaches one. Last, and sized
-            to what is left rather than to the image: a wedding card scanned at
-            full page would otherwise push the signatures onto a sheet of their
-            own. */}
-        {batch.invitationCardURL ? (
+        {batch.closedMemberName ? (
+          <Text style={s.forWhom}>
+            {batch.closedMemberRegNo ? `${batch.closedMemberRegNo} · ` : ''}
+            {batch.closedMemberName}
+          </Text>
+        ) : null}
+
+        {/* The closed member's invitation card, read back from their own
+            closing rather than uploaded here. One card belongs to one family, so
+            it lives on that family's closing and is printed on their समापन पत्र
+            too — the batch used to keep a second copy, which on a batch of fifteen
+            closings could only ever be one of the fifteen. Last, and sized to
+            what is left rather than to the image: a wedding card scanned at full
+            page would otherwise push the signatures onto a sheet of their own. */}
+        {closedMemberCardURL ? (
           <View style={s.card}>
-            <Text style={s.cardLabel}>निमंत्रण पत्र</Text>
-            <Image src={batch.invitationCardURL} style={s.cardImage} />
+            <Text style={s.cardLabel}>निमंत्रण पत्र{batch.closedMemberName ? ` — ${batch.closedMemberName}` : ''}</Text>
+            <Image src={closedMemberCardURL} style={s.cardImage} />
           </View>
         ) : null}
 
@@ -233,6 +245,8 @@ function sheet(primary, accent) {
     noteText: { fontSize: 8.2, lineHeight: 1.35 },
 
     description: { fontSize: 7.8, color: '#444', marginTop: 6, lineHeight: 1.35 },
+
+    forWhom: { fontSize: 9, fontWeight: 'bold', color: '#444', marginTop: 2 },
 
     card: { marginTop: 8, alignItems: 'center' },
     cardLabel: { fontSize: 7, color: '#666', marginBottom: 3 },

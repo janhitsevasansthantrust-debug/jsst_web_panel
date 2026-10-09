@@ -27,15 +27,21 @@ export const GET = handler(async (request, context) => {
 
   const receipt = { id: snap.id, ...snap.data() };
 
-  // An agent may reprint only what they collected.
-  if (scope.role === ROLE.AGENT && receipt.collectedByAgentId !== scope.agentId) {
-    throw notFound('रसीद नहीं मिली');
-  }
-
   const [trust, memberSnap] = await Promise.all([
     getTrust(scope),
     db.doc(paths.member(scope.trustId, receipt.memberId)).get(),
   ]);
+
+  // An agent may reprint what they collected, and any receipt of their own
+  // members — the agent app shows a member's whole payment history, including
+  // what was paid at the office.
+  if (
+    scope.role === ROLE.AGENT &&
+    receipt.collectedByAgentId !== scope.agentId &&
+    memberSnap.data()?.agentId !== scope.agentId
+  ) {
+    throw notFound('रसीद नहीं मिली');
+  }
 
   const [{ renderPdf }, { ReceiptPdf }] = await Promise.all([
     import('../../../../../server/pdf/renderer.js'),

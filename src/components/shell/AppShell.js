@@ -4,16 +4,16 @@ import { useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
-import { Layout, Menu, Avatar, Dropdown, Typography, Grid, Button, Space, Tag, Drawer } from 'antd';
+import { Layout, Menu, Avatar, Dropdown, Typography, Grid, Button, Space, Tag, Drawer, Badge } from 'antd';
 import {
   DashboardOutlined, TeamOutlined, HeartOutlined, WalletOutlined, GroupOutlined,
   UserSwitchOutlined, PercentageOutlined, ProjectOutlined, FileTextOutlined,
-  SettingOutlined, LogoutOutlined, MenuOutlined, DatabaseOutlined,
+  SettingOutlined, LogoutOutlined, MenuOutlined, DatabaseOutlined, UserAddOutlined,
 } from '@ant-design/icons';
 import { signOut } from 'firebase/auth';
 
 import { auth } from '../../lib/firebase/client.js';
-import { api } from '../../lib/api.js';
+import { api, keys } from '../../lib/api.js';
 import ProgramSwitcher from './ProgramSwitcher.js';
 import LanguageSwitcher from './LanguageSwitcher.js';
 import { useT } from '../../i18n/index.js';
@@ -32,6 +32,7 @@ const { Text } = Typography;
 const NAV = [
   { key: '/dashboard', icon: <DashboardOutlined />, label: 'डैशबोर्ड', min: ROLE.AGENT },
   { key: '/members', icon: <TeamOutlined />, label: 'सदस्य', min: ROLE.AGENT },
+  { key: '/member-requests', icon: <UserAddOutlined />, label: 'सदस्य अनुरोध', min: ROLE.OPERATOR, badge: 'requests' },
   { key: '/closings', icon: <HeartOutlined />, label: 'क्लोजिंग', min: ROLE.AGENT },
   { key: '/collect', icon: <WalletOutlined />, label: 'भुगतान लें', min: ROLE.AGENT },
   { key: '/bulk-collect', icon: <GroupOutlined />, label: 'सामूहिक वसूली', min: ROLE.AGENT },
@@ -71,10 +72,29 @@ export default function AppShell({ user, children }) {
   const trustName = b?.nameHi || t('ट्रस्ट प्रबंधन');
 
   const rank = ROLE_RANK[user?.role] ?? 0;
+
+  // Requests from the agent app waiting for the office — one count() read,
+  // refreshed every couple of minutes so a new request shows up on its own.
+  const pendingRequests = useQuery({
+    queryKey: keys.memberRequestsPending,
+    queryFn: () => api.memberRequests.pendingCount(),
+    enabled: rank >= ROLE_RANK[ROLE.OPERATOR],
+    staleTime: 60 * 1000,
+    refetchInterval: 2 * 60 * 1000,
+  });
+  const badges = { requests: pendingRequests.data?.pending ?? 0 };
+
   const items = NAV.filter((n) => rank >= (ROLE_RANK[n.min] ?? 0)).map((n) => ({
     key: n.key,
     icon: n.icon,
-    label: <Link href={n.key} onClick={() => setDrawerOpen(false)}>{t(n.label)}</Link>,
+    label: (
+      <Link href={n.key} onClick={() => setDrawerOpen(false)}>
+        {t(n.label)}
+        {n.badge && badges[n.badge] ? (
+          <Badge count={badges[n.badge]} size="small" style={{ marginInlineStart: 8, boxShadow: 'none' }} />
+        ) : null}
+      </Link>
+    ),
   }));
 
   // Longest matching prefix, so /members/123 still lights up /members.

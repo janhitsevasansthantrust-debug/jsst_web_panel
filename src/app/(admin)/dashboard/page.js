@@ -1,7 +1,7 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
-import { Card, Col, Row, Statistic, Alert, Skeleton, Typography, Tag, Space } from 'antd';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Card, Col, Row, Statistic, Alert, Skeleton, Typography, Tag, Space, Button } from 'antd';
 import {
   TeamOutlined,
   HeartOutlined,
@@ -45,6 +45,20 @@ export default function DashboardPage() {
     queryFn: () => api.closings.list(),
   });
 
+  /**
+   * Rebuild the counters from the documents themselves.
+   *
+   * Closings created before the expected-amount fix never added what they
+   * were billed to the trust's totals, so on those trusts "कुल बकाया" shows a
+   * negative figure and वसूली stays at 0%. One recount (a few aggregation
+   * reads) puts it right; after that the counters stay right on their own.
+   */
+  const queryClient = useQueryClient();
+  const recount = useMutation({
+    mutationFn: () => api.stats({ recompute: 'true' }),
+    onSuccess: (res) => queryClient.setQueryData(keys.stats, res),
+  });
+
   if (stats.isError) {
     return (
       <Alert
@@ -75,6 +89,20 @@ export default function DashboardPage() {
           </>
         }
       />
+
+      {!stats.isLoading && ((money.dueTotal ?? 0) < 0 || (!money.expectedTotal && (money.collectedTotal ?? 0) > 0)) ? (
+        <Alert
+          type="warning"
+          showIcon
+          message={t('बकाया और वसूली के आँकड़े पुराने हिसाब से हैं')}
+          description={t('पुरानी क्लोजिंग की अपेक्षित राशि जोड़ी नहीं गई थी। एक बार दोबारा गिनने से सही हो जाएगा।')}
+          action={
+            <Button size="small" loading={recount.isPending} onClick={() => recount.mutate()}>
+              {t('दोबारा गिनें')}
+            </Button>
+          }
+        />
+      ) : null}
 
       <Skeleton loading={stats.isLoading} active paragraph={{ rows: 4 }}>
         <Row gutter={[16, 16]}>

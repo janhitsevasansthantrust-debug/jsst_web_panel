@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { db, serverNow } from '../firebase/admin.js';
-import { badRequest, notFound } from '../http.js';
+import { badRequest, notFound } from '../errors.js';
 import { resolveRegistrationConfig } from '../../lib/registration.js';
 import { matchAgeGroup } from '../../lib/ageGroup.js';
 import { LIMITS, paths } from '../../config/constants.js';

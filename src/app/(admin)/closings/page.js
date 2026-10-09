@@ -3,16 +3,19 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Alert, App, Button, Card, Checkbox, Col, DatePicker, Descriptions, Divider, Drawer, Form, Input, InputNumber, Modal, Progress, Row, Segmented, Select, Space, Statistic, Table, Tag, Typography,
+  Alert, App, Button, Card, Checkbox, Col, DatePicker, Descriptions, Divider, Drawer, Form, Input, InputNumber, Modal, Progress, Row, Segmented, Select, Space, Statistic, Table, Tabs, Tag, Tooltip, Typography,
 } from 'antd';
 import {
   PlusOutlined, ReloadOutlined, UndoOutlined, SearchOutlined, FilePdfOutlined,
-  PrinterOutlined, EditOutlined,
+  PrinterOutlined, EditOutlined, CalendarOutlined, TeamOutlined, WalletOutlined,
+  ExclamationCircleOutlined, ProfileOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 
 import PageHeader from '../../../components/ui/PageHeader.js';
+import StatCard from '../../../components/ui/StatCard.js';
 import ClosingBatches, { BatchFormModal } from '../../../components/closings/ClosingBatches.js';
+import ClosingCollections from '../../../components/closings/ClosingCollections.js';
 import DataGrid, { inr, money, dateCell } from '../../../components/ui/DataGrid.js';
 import { api, keys } from '../../../lib/api.js';
 import { useMasters } from '../../../lib/useMasters.js';
@@ -21,20 +24,59 @@ import { useT } from '../../../i18n/index.js';
 const { Text, Paragraph } = Typography;
 
 /**
- * Closings.
+ * Closings — one screen, three jobs.
  *
- * The whole list is ONE Firestore read — it comes from the shared closings
+ * It used to be four cards stacked down the page: the month's notices, the
+ * collection counter, and then the closing register itself at the very bottom,
+ * below the fold. Nothing said which of them was the page, and an operator had
+ * to scroll past everything else to reach the register the page is named after.
+ *
+ * So the register is now the tab that opens, the two workflows sit beside it as
+ * tabs, and the four numbers that decide what to do next are above all of them.
+ *
+ * The whole register is ONE Firestore read — it comes from the shared closings
  * index document rather than 500 individual documents. Creating a closing is
  * one transaction and five writes, whatever the size of the trust, because no
  * obligation rows are materialised.
  */
 export default function ClosingsPage() {
   const t = useT();
+  const [tab, setTab] = useState('register');
   const [createOpen, setCreateOpen] = useState(false);
   const [detail, setDetail] = useState(null);
-  // Defaults to this month, which is what the list is asked for nine times out
-  // of ten. An empty range would print every closing the trust has ever made.
-  const [range, setRange] = useState(() => [dayjs().startOf('month'), dayjs()]);
+
+  /**
+   * The period.
+   *
+   * It filters the register AND the collection tab AND the printed list, because
+   * a control that quietly does one of three things is worse than no control: it
+   * looks like a filter, so people filter, print, and hand over the wrong month.
+   *
+   * It opens EMPTY, and that is deliberate even though "this month" sounds like
+   * the polite default. A closing can carry any date, including one in the
+   * future — a family books the tenth, the office records it on the sixth — and
+   * an upper bound of today silently hides it. So does the first of the month,
+   * for everything closed in the month before. The register's one promise is
+   * that a closing somebody made is never invisible, and a default range breaks
+   * it. Empty costs nothing: the list is already in hand, and the tiles below
+   * become trust-wide totals, which is the more useful number anyway.
+   *
+   * It is the ONLY thing the whole page shares. The batch, the closed member and
+   * the agent belong to the collection tab and live there — otherwise the four
+   * figures above the tabs would silently change meaning when the operator
+   * changed a tab they had since left.
+   */
+  const [range, setRange] = useState(null);
+
+  const scope = useMemo(
+    () => ({
+      fromMs: range?.[0]?.startOf('day').valueOf(),
+      // To the END of the closing day — a range typed as "1st to 30th" that
+      // stopped at midnight would drop the 30th.
+      toMs: range?.[1]?.endOf('day').valueOf(),
+    }),
+    [range],
+  );
 
   const query = useQuery({
     queryKey: keys.closings,
@@ -43,11 +85,59 @@ export default function ClosingsPage() {
 
   const closings = query.data?.closings ?? [];
 
-  const totals = useMemo(() => {
-    const active = closings.filter((c) => c.status !== 'reverted');
-    return { total: closings.length, active: active.length };
-  }, [closings]);
+  /**
+   * What the period owes, in one line.
+   *
+   * `limit: 1` because the totals are worked out before the page is cut — the
+   * whole trust is walked either way, so asking for fifty rows instead of one
+   * would spend fifty times the response on a number that is already in the
+   * totals. Scoped to the period only, which is also why it is cheap: the
+   * member × closing pass only walks the closings inside the range, so a month
+   * costs a fraction of what clearing the range would.
+   */
+  const summary = useQuery({
+    queryKey: ['closing-summary', scope],
+    queryFn: () => api.closings.report({ ...scope, page: 1, limit: 1 }),
+  });
 
+  /** The register, narrowed to the period. Free — the list is already here. */
+  const register = useMemo(
+    () =>
+      closings.filter(
+        (c) =>
+          (scope.fromMs == null || c.dateMs >= scope.fromMs) &&
+          (scope.toMs == null || c.dateMs <= scope.toMs),
+      ),
+    [closings, scope.fromMs, scope.toMs],
+  );
+
+  const counts = useMemo(() => {
+    const active = register.filter((c) => c.status !== 'reverted');
+    return {
+      inPeriod: register.length,
+      active: active.length,
+      reverted: register.length - active.length,
+      allTime: closings.length,
+      /** Whether a date range is actually narrowing anything. */
+      limited: scope.fromMs != null || scope.toMs != null,
+    };
+  }, [register, closings, scope.fromMs, scope.toMs]);
+
+  const totals = summary.data?.totals;
+  const collected = totals?.paidAmount ?? 0;
+  const outstanding = totals?.dueAmount ?? 0;
+  const billed = collected + outstanding;
+  const payable = totals?.members ?? 0;
+
+  // Keyed on the language, not on nothing.
+  //
+  // The first render of any page is the English hydration pass — `useLocale`
+  // falls back to `DEFAULT_LOCALE` until React has caught up with
+  // localStorage — so a memo with `[]` would compute these headers in English
+  // once and hand a Hindi page an English grid forever. `t` is a new function
+  // on every render, so depending on it would rebuild the columns on every
+  // keystroke; `t.locale` is the one thing that actually changes.
+  const locale = t.locale;
   const columns = useMemo(
     () => [
       { headerName: t('क्रम'), field: 'seq', width: 90, pinned: 'left', sort: 'desc' },
@@ -85,44 +175,71 @@ export default function ClosingsPage() {
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [locale],
   );
 
   return (
     <>
       <PageHeader
         title={t('क्लोजिंग')}
-        subtitle={`${totals.active} ${t('चालू')} · ${totals.total} ${t('कुल')} — ${t('पूरी सूची 1 read में')}`}
-        error={query.error}
+        subtitle={
+          <Space size={6} wrap>
+            <Tag color="blue" style={{ marginInlineEnd: 0 }}>{t('पूरी सूची 1 read में')}</Tag>
+            <Text type="secondary" style={{ fontSize: 12.5 }}>
+              {counts.limited
+                ? t('कुल {n} क्लोजिंग में से {p} इस अवधि में', {
+                    n: counts.allTime,
+                    p: counts.inPeriod,
+                  })
+                : t('कुल {n} क्लोजिंग · सभी दिख रही हैं', { n: counts.allTime })}
+            </Text>
+          </Space>
+        }
+        error={query.error ?? summary.error}
         extra={
           <>
-            {/* The period the printed सूची covers. Inline rather than behind a
-                dialog, because the date range IS the report — hiding it makes
-                people print the wrong month and only notice on paper. */}
-            <DatePicker.RangePicker
-              value={range}
-              onChange={setRange}
-              format="DD-MM-YYYY"
-              allowEmpty={[true, true]}
-              style={{ width: 250 }}
-            />
+            {/* This control used to need a tooltip explaining how to see everything,
+                because "this month" was the default and emptying it was a trick.
+                Empty IS the default now, so the useful thing to say is what
+                picking dates does — it narrows the register, the instalments and
+                the printed list together, never one of them alone. Clearing it
+                again is one click, in the bar under the register. */}
+            <Tooltip
+              title={t(
+                'तारीख़ चुनने से पूरा पन्ना एक साथ सीमित होता है — रजिस्टर, किस्तें और छपाई, तीनों'
+              )}
+            >
+              <DatePicker.RangePicker
+                value={range}
+                onChange={setRange}
+                format="DD-MM-YYYY"
+                allowEmpty={[true, true]}
+                style={{ width: 250 }}
+              />
+            </Tooltip>
+            {/* The one print action on the page. It used to sit here AND in the
+                register bar, doing the same thing twice with two different
+                labels; a control that says two things at once is worse than one
+                that says one thing clearly. It stays in the header because that
+                is where the app puts page actions and it is reachable from every
+                tab. The label names the scope it will actually print, because
+                "print list" is ambiguous the moment the range is empty. */}
             <Button
               icon={<FilePdfOutlined />}
-              onClick={() =>
-                window.open(
-                  api.closings.listPdfUrl({
-                    fromMs: range?.[0]?.startOf('day').valueOf(),
-                    // To the END of the closing day — a range typed as "1st to
-                    // 30th" that stopped at midnight would drop the 30th.
-                    toMs: range?.[1]?.endOf('day').valueOf(),
-                  }),
-                  '_blank',
-                )
-              }
+              onClick={() => window.open(api.closings.listPdfUrl(scope), '_blank')}
             >
-              {t('सूची छापें')}
+              {counts.limited ? t('इस अवधि की सूची छापें') : t('पूरी सूची छापें')}
             </Button>
-            <Button icon={<ReloadOutlined />} onClick={() => query.refetch()} />
+            <Tooltip title={t('दोबारा लाएँ')}>
+              <Button
+                icon={<ReloadOutlined />}
+                loading={query.isFetching || summary.isFetching}
+                onClick={() => {
+                  query.refetch();
+                  summary.refetch();
+                }}
+              />
+            </Tooltip>
             <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
               {t('नई क्लोजिंग')}
             </Button>
@@ -130,20 +247,221 @@ export default function ClosingsPage() {
         }
       />
 
-      <ClosingBatches />
+      {/* ── the four numbers that decide what to do next ────────────────────
+          Above the tabs, because they answer "where does this month stand"
+          before a tab has been chosen rather than after. Scoped by the PERIOD
+          and nothing else, so their meaning does not depend on which tab the
+          operator happens to be sitting in — the caption under them says so
+          outright, and the way to change it is the one date range at the top. */}
+      <Row gutter={[16, 16]}>
+        <Col xs={12} lg={6}>
+          <StatCard
+            icon={<CalendarOutlined />}
+            color="var(--brand)"
+            label={counts.limited ? t('इस अवधि की क्लोजिंग') : t('कुल क्लोजिंग')}
+            value={counts.inPeriod}
+            extra={
+              <>
+                <Tag color="blue" style={{ marginInlineEnd: 0 }}>
+                  {t('चालू {n}', { n: counts.active })}
+                </Tag>
+                {counts.reverted > 0 && (
+                  <Tag color="red" style={{ marginInlineEnd: 0 }}>
+                    {t('वापस {n}', { n: counts.reverted })}
+                  </Tag>
+                )}
+              </>
+            }
+          />
+        </Col>
 
-      <DataGrid
-        rows={closings}
-        columns={columns}
-        loading={query.isLoading}
-        getRowId={(p) => p.data.id}
-        onRowClick={(row) => setDetail(row)}
-        emptyText={t('अभी कोई क्लोजिंग नहीं')}
+        <Col xs={12} lg={6}>
+          <StatCard
+            icon={<TeamOutlined />}
+            color="var(--accent)"
+            label={t('किस्त देने वाले सदस्य')}
+            value={payable}
+            hint={t('{n} क्लोजिंग के पात्र', { n: summary.data?.closings?.length ?? 0 })}
+          />
+        </Col>
+
+        <Col xs={12} lg={6}>
+          <StatCard
+            icon={<WalletOutlined />}
+            color="var(--paid)"
+            label={t('जमा हुई राशि')}
+            value={inr(collected)}
+            hint={
+              billed > 0
+                ? t('वसूली {pct}% · कुल {all}', {
+                    pct: Math.round((collected / billed) * 100),
+                    all: inr(billed),
+                  })
+                : counts.limited
+                  ? t('इस अवधि में कोई किस्त नहीं')
+                  : t('अभी कोई किस्त नहीं')
+            }
+          />
+        </Col>
+
+        <Col xs={12} lg={6}>
+          <StatCard
+            icon={<ExclamationCircleOutlined />}
+            color="var(--due)"
+            label={t('अभी बकाया')}
+            value={inr(outstanding)}
+            hint={
+              outstanding > 0
+                ? t('जमा करने के लिए {tab} टैब खोलें', { tab: t('किस्तें, जमा और रसीद') })
+                : counts.limited
+                  ? t('इस अवधि में सब जमा है')
+                  : t('सब जमा है')
+            }
+          />
+        </Col>
+      </Row>
+
+      <Text
+        type="secondary"
+        style={{ display: 'block', fontSize: 12, margin: '8px 0 4px' }}
+      >
+        <CalendarOutlined />{' '}
+        {scope.fromMs == null && scope.toMs == null
+          ? t('ये आँकड़े पूरी सूची पर हैं — ऊपर से तारीख़ चुनकर किसी महीने तक सीमित करें')
+          : t(
+              'ये आँकड़े {from} से {to} तक की क्लोजिंग पर हैं — सारे सदस्य, सारे एजेंट',
+              {
+                from: dayjs(scope.fromMs).format('DD-MM-YYYY'),
+                to: dayjs(scope.toMs).format('DD-MM-YYYY'),
+              },
+            )}
+      </Text>
+
+      {/* ── the three jobs, one at a time ───────────────────────────────────
+          Tabs rather than four cards down the page. Stacked, they were four
+          things of equal weight fighting for the same first screenful, and the
+          register — the thing the page is named after — was last. A tab bar
+          also makes the answer to "which of these do I want" a single click
+          instead of a scroll. */}
+      <Tabs
+        activeKey={tab}
+        onChange={setTab}
+        size="large"
+        type="line"
+        style={{ marginTop: 6 }}
+        items={[
+          {
+            key: 'register',
+            label: (
+              <Space size={7}>
+                <ProfileOutlined />
+                <span>{t('क्लोजिंग रजिस्टर')}</span>
+                {/* A badge earns its place by telling you something to act on.
+                    A count of zero is the absence of news, and printing it on
+                    every tab bar makes an empty selection look like a fault. */}
+                {register.length > 0 && (
+                  <Tag style={{ marginInlineEnd: 0 }}>{register.length}</Tag>
+                )}
+              </Space>
+            ),
+            children: (
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                <RegisterBar counts={counts} onClearRange={() => setRange(null)} />
+                <DataGrid
+                  rows={register}
+                  columns={columns}
+                  loading={query.isLoading}
+                  getRowId={(p) => p.data.id}
+                  onRowClick={(row) => setDetail(row)}
+                  emptyText={
+                    counts.allTime
+                      ? t('इस अवधि में कोई क्लोजिंग नहीं — ऊपर से तारीख़ बदलें')
+                      : t('अभी कोई क्लोजिंग नहीं')
+                  }
+                />
+              </Space>
+            ),
+          },
+          {
+            key: 'collect',
+            label: (
+              <Space size={7}>
+                <WalletOutlined />
+                <span>{t('किस्तें, जमा और रसीद')}</span>
+                {outstanding > 0 && (
+                  <Tag color="red" style={{ marginInlineEnd: 0 }}>
+                    {inr(outstanding)}
+                  </Tag>
+                )}
+              </Space>
+            ),
+            children: <ClosingCollections scope={scope} />,
+          },
+          {
+            key: 'batches',
+            label: (
+              <Space size={7}>
+                <FilePdfOutlined />
+                <span>{t('समूह और सूचना')}</span>
+              </Space>
+            ),
+            children: <ClosingBatches />,
+          },
+        ]}
       />
 
       <CreateClosingModal open={createOpen} onClose={() => setCreateOpen(false)} />
       <ClosingDetailDrawer closing={detail} onClose={() => setDetail(null)} />
     </>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * What the register is showing, said out loud, with a way back.
+ *
+ * A date range with no count beside it is a control whose effect nobody can
+ * predict — and the failure mode is a printed sheet for the wrong month, which
+ * is discovered after it has gone out. So the bar states how many of the total
+ * are on screen, and clearing the range is one click rather than three fiddly
+ * ones.
+ */
+function RegisterBar({ counts, onClearRange }) {
+  const t = useT();
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        flexWrap: 'wrap',
+        padding: '10px 14px',
+        borderRadius: 'var(--radius-sm)',
+        background: 'var(--surface)',
+        border: '1px solid var(--line)',
+      }}
+    >
+      {counts.limited ? (
+        <>
+          <Text style={{ fontSize: 13 }}>
+            <Text strong>{counts.inPeriod}</Text>
+            <Text type="secondary">
+              {t('कुल {all} क्लोजिंग में से दिख रही हैं', { all: counts.allTime })}
+            </Text>
+          </Text>
+          <Button size="small" type="link" onClick={onClearRange}>
+            {t('तारीख़ की सीमा हटाएँ')}
+          </Button>
+        </>
+      ) : (
+        <Text type="secondary" style={{ fontSize: 13 }}>
+          {t('सारी {n} क्लोजिंग दिख रही हैं — ऊपर से तारीख़ चुनकर किसी महीने तक सीमित करें', {
+            n: counts.allTime,
+          })}
+        </Text>
+      )}
+    </div>
   );
 }
 
@@ -366,7 +684,8 @@ function ClosingDetailDrawer({ closing, onClose }) {
     const q = rowSearch.trim().toLowerCase();
 
     return all.filter((r) => {
-      if (rowFilter !== 'all' && r.status !== rowFilter) return false;
+      if (rowFilter === 'pending' && !(r.remaining > 0)) return false;
+      if (rowFilter === 'paid' && r.status !== 'paid') return false;
       if (!q) return true;
       return [r.displayName, r.registrationNumber, r.phone, r.village, r.fatherName]
         .some((v) => String(v ?? '').toLowerCase().includes(q));
@@ -436,7 +755,7 @@ function ClosingDetailDrawer({ closing, onClose }) {
           <Card size="small">
             <Progress percent={pct} status={pct === 100 ? 'success' : 'active'} />
             <Text type="secondary" style={{ fontSize: 12 }}>
-              {t('ये आँकड़े क्लोजिंग document के counters से आते हैं — 1 read।')}
+              {t('जुड़ने और बंद होने की तारीख़ तथा दर्ज भुगतान के आधार पर गणना।')}
             </Text>
           </Card>
 
@@ -794,12 +1113,6 @@ function EditClosingModal({ closing, id, open, onClose, onDone }) {
 
       return api.closings.update(id, {
         ...rest,
-        ...(closingDate
-          ? {
-              closingDate: closingDate.format('DD-MM-YYYY'),
-              closingDateMs: closingDate.startOf('day').valueOf(),
-            }
-          : {}),
         payout: {
           memberContributed, membersCount, amountGiven,
           paymentMode, oldPending, netAmount,
@@ -853,9 +1166,9 @@ function EditClosingModal({ closing, id, open, onClose, onDone }) {
             <Form.Item
               name="closingDate"
               label={t('क्लोजिंग तिथि')}
-              extra={t('तारीख़ बदलने पर कौन भुगतान करेगा, यह दोबारा तय होगा')}
-            >
-              <DatePicker format="DD-MM-YYYY" style={{ width: '100%' }} />
+               extra={t('तारीख़ सुधारने के लिए क्लोजिंग वापस लेकर नई बनाएँ — मौजूदा रसीदें सुरक्षित रहेंगी')}
+             >
+               <DatePicker format="DD-MM-YYYY" style={{ width: '100%' }} disabled />
             </Form.Item>
           </Col>
           <Col span={12}>

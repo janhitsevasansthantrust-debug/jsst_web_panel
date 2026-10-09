@@ -152,9 +152,66 @@ export function commissionForJoinFee(policy, { joinFeeAmount, runningCount = 0 }
 }
 
 /**
+ * The part of an entry an agent may still be paid for.
+ *
+ * A closing can be reverted after the receipt that paid it was already
+ * commission-earning. The money goes back to the member as credit, so the
+ * commission earned on it has to go back to the agent too — otherwise the
+ * trust pays commission on a collection that no longer exists. The entry is
+ * kept and the clawed-back part is recorded on it, because the agent is owed
+ * an explanation and "your row disappeared" is not one.
+ */
+export function netAmount(entry) {
+  const earned = round2(Number(entry?.amount) || 0);
+  const reversed = round2(Number(entry?.reversedAmount) || 0);
+  return round2(Math.max(0, earned - reversed));
+}
+
+/**
+ * How much commission to take back when `amount` of the collection behind an
+ * entry is reversed — the share the reversed money actually earned.
+ *
+ * A receipt can carry several closings, and only one of them may be reverted,
+ * so the whole entry cannot be cancelled. The share is proportional to the
+ * reversed amount against the entry's own base, and never more than what the
+ * agent has left to be paid. The joining-fee entry on the same receipt earns
+ * nothing from a closing, so a closing reversal leaves it alone.
+ *
+ * Already-paid money cannot be un-earned: if the entry has been paid out, the
+ * caller must skip it rather than push the agent's balance negative.
+ */
+export function reverseCommission(entry, { amount = 0, baseAmount = 0 } = {}) {
+  if (!entry) return { amount: 0, remaining: 0, exhausted: false };
+  if (entry.sourceType && entry.sourceType !== 'payment') {
+    return { amount: 0, remaining: netAmount(entry), exhausted: false };
+  }
+
+  const gross = round2(Number(entry.amount) || 0);
+  const remaining = netAmount(entry);
+  if (gross <= 0 || remaining <= 0) return { amount: 0, remaining: 0, exhausted: true };
+
+  const base = Number(baseAmount) || Number(entry.baseAmount) || 0;
+  const reversed = Math.max(0, Number(amount) || 0);
+  // No base to take a share of means the entry cannot be attributed to any
+  // part of the receipt. Take nothing rather than guessing at the whole.
+  if (base <= 0 || reversed <= 0) return { amount: 0, remaining, exhausted: false };
+
+  /**
+   * The share comes off what the entry EARNED, never off what is left of it.
+   * Taking a percentage of the remainder would compound — two reversals of the
+   * same instalment would take less the second time than the first, and the
+   * money left behind would be a fraction nobody can explain to an agent.
+   */
+  const share = round2((gross * Math.min(reversed, base)) / base);
+  const take = round2(Math.min(share, remaining));
+
+  return { amount: take, remaining: round2(remaining - take), exhausted: remaining - take <= 0 };
+}
+
+/**
  * Total up a set of entries for a payout statement.
  * Only `earned` and `approved` entries are payable — `paid` ones are already
- * settled and `cancelled` ones never existed.
+ * settled and `cancelled` ones never existed. Amounts are NET of any reversal.
  */
 export function summariseEntries(entries) {
   const summary = {
@@ -168,7 +225,7 @@ export function summariseEntries(entries) {
   };
 
   for (const e of entries) {
-    const amount = Number(e.amount) || 0;
+    const amount = netAmount(e);
 
     if (e.status === 'cancelled') {
       summary.cancelledCount += 1;

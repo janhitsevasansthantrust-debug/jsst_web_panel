@@ -257,6 +257,17 @@ export default function MemberForm({ open, onClose, member }) {
           ? t('सदस्य अपडेट हो गया')
           : t('सदस्य जुड़ गया — रजि. नंबर {n}', { n: res.member?.registrationNumber ?? '' }),
       );
+      // The member-app login made with the member (reg. no. + mobile).
+      if (!editing && res.login) {
+        if (res.login.created) {
+          message.success({
+            content: t('सदस्य ऐप लॉगिन बना — ID: {id}, पासवर्ड: {pw} (मोबाइल नंबर)', { id: res.login.loginId, pw: res.login.password }),
+            duration: 10,
+          });
+        } else if (res.login.reason) {
+          message.warning({ content: t('सदस्य ऐप लॉगिन नहीं बना: {r}', { r: res.login.reason }), duration: 8 });
+        }
+      }
       // Follow the member into whatever योजना it was filed under, otherwise
       // the list the user is about to look at is scoped to a different book
       // and the row they just created is simply not in it.

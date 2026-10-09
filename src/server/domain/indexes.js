@@ -2,7 +2,8 @@ import 'server-only';
 
 import { db, serverNow, getAllDocs } from '../firebase/admin.js';
 import { LIMITS, paths, CLOSING_STATUS } from '../../config/constants.js';
-import { MEMBER_INDEX_FIELDS, toMemberEntry } from './indexEntry.js';
+import { MEMBER_INDEX_FIELDS, toMemberEntry, fromMemberEntry } from './indexEntry.js';
+import { computeDue } from './ledger.js';
 
 // Re-exported so callers keep one import for "the member index".
 export { fromMemberEntry } from './indexEntry.js';
@@ -60,9 +61,19 @@ function memoSet(key, value) {
   return value;
 }
 
-/** Drop the cached closings index for one program. */
+/**
+ * Drop the cached closings index for one program.
+ *
+ * The member index goes with it on purpose. Each entry in that index now carries
+ * the member's `due` and `dueC`, DERIVED from this trust's closings — so a
+ * closing created or reverted has changed what the member index says. Leaving
+ * it warm would keep serving dues that no longer exist for up to a minute,
+ * which is exactly the "the screen says one thing and the receipt says another"
+ * failure this system exists to avoid.
+ */
 export function invalidateIndexCache(trustId, programId) {
   memo.delete(`closings:${trustId}:${programId}`);
+  memo.delete(`members:${trustId}`);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -100,7 +111,7 @@ export async function getClosingsIndex(trustId, programId, { fresh = false } = {
 }
 
 /** The compact shape stored in the index — keep it small, it is read constantly. */
-function toIndexEntry(id, c) {
+export function toIndexEntry(id, c) {
   return {
     seq: c.seq,
     id,
@@ -174,61 +185,21 @@ export async function rebuildClosingsIndex(trustId, programId) {
 }
 
 /**
- * Append one closing to the index without re-reading the whole collection.
- * Used on the create path, where we already hold the new closing's data.
+ * ─── There is deliberately no "append one closing" or "patch one closing"
+ * helper here any more ──────────────────────────────────────────────────────
+ *
+ * Both used to exist, and both were a trap. They ran a read-modify-write on
+ * the index document in a transaction of their own — AFTER the transaction that
+ * wrote the closing had already committed. So the closing document and the
+ * index that every notice, bill and due-amount is computed from could disagree:
+ * a crash, a contention retry or a failed rule could leave a closing that
+ * exists but is not on the sheet, and nothing detects that.
+ *
+ * The index is now written inside the same transaction as the closing itself
+ * (create) or inside the revert's own transaction (retire, re-batch), so the
+ * two are always committed together. If you need to change the index, you are
+ * changing it in that transaction — not afterwards.
  */
-export async function appendClosingToIndex(trustId, programId, closingId, closing) {
-  const ref = db.doc(paths.closingsIndex(trustId, programId));
-
-  await db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
-    const entry = toIndexEntry(closingId, closing);
-
-    if (!snap.exists) {
-      tx.set(ref, {
-        items: [entry],
-        maxSeq: entry.seq,
-        count: 1,
-        version: Date.now(),
-        updatedAt: serverNow(),
-      });
-      return;
-    }
-
-    const items = snap.data().items ?? [];
-    const without = items.filter((i) => i.id !== closingId);
-    without.push(entry);
-    without.sort((a, b) => a.seq - b.seq);
-
-    tx.update(ref, {
-      items: without,
-      maxSeq: Math.max(snap.data().maxSeq ?? 0, entry.seq),
-      count: without.length,
-      version: Date.now(),
-      updatedAt: serverNow(),
-    });
-  });
-
-  invalidateIndexCache(trustId, programId);
-}
-
-/** Flip one entry's status in the index (used by revert / un-revert). */
-export async function patchClosingInIndex(trustId, programId, closingId, patch) {
-  const ref = db.doc(paths.closingsIndex(trustId, programId));
-
-  await db.runTransaction(async (tx) => {
-    const snap = await tx.get(ref);
-    if (!snap.exists) return;
-
-    const items = (snap.data().items ?? []).map((i) =>
-      i.id === closingId ? { ...i, ...patch } : i,
-    );
-
-    tx.update(ref, { items, version: Date.now(), updatedAt: serverNow() });
-  });
-
-  invalidateIndexCache(trustId, programId);
-}
 
 /* ══════════════════════════════════════════════════════════════════════════
    Member search index
@@ -270,6 +241,7 @@ export async function rebuildMembersIndex(trustId) {
       shardCount: shards.length,
       count: items.length,
       version,
+      schemaVersion: 2,
       updatedAt: serverNow(),
     });
   });
@@ -304,7 +276,10 @@ export async function getMembersIndex(trustId, { fresh = false } = {}) {
   const key = `members:${trustId}`;
   if (!fresh) {
     const cached = memoGet(key);
-    if (cached) return cached;
+    // `derived` means the dues are already worked out. Re-working them for
+    // 5,000 members against 500 closings is 2.5 million comparisons, which is
+    // not something to repeat on every request that happens to read the index.
+    if (cached) return cached.derived ? cached : deriveMemberDues(trustId, cached);
   }
 
   const first = await db.doc(paths.membersIndexShard(trustId, 0)).get();
@@ -319,6 +294,10 @@ export async function getMembersIndex(trustId, { fresh = false } = {}) {
   }
 
   const head = first.data();
+  if (head.schemaVersion !== 2) {
+    await rebuildMembersIndex(trustId);
+    return getMembersIndex(trustId, { fresh: true });
+  }
   const shardCount = head.shardCount ?? 1;
 
   const rest = shardCount > 1
@@ -358,7 +337,30 @@ export async function getMembersIndex(trustId, { fresh = false } = {}) {
     }
   }
 
-  return memoSet(key, { items, version: head.version ?? 0, shardCount });
+  return deriveMemberDues(trustId, memoSet(key, { items, version: head.version ?? 0, shardCount }));
+}
+
+/**
+ * Work out what every member owes, once, and remember it.
+ *
+ * The alternative is storing a `dueCount`/`dueAmount` on each member document
+ * and rewriting all 5,000 of them every time a closing is created — the loop
+ * over members this whole system is built to avoid. Deriving it here costs
+ * arithmetic, not writes, and the result is cached until a closing changes
+ * (`invalidateIndexCache` drops it).
+ */
+async function deriveMemberDues(trustId, index) {
+  const programs = [...new Set(index.items.map((m) => m.pid).filter(Boolean))];
+  const indexes = await Promise.all(programs.map((pid) => getClosingsIndex(trustId, pid)));
+  const byProgram = new Map(programs.map((pid, i) => [pid, indexes[i].items]));
+  return memoSet(`members:${trustId}`, {
+    ...index,
+    derived: true,
+    items: index.items.map((entry) => {
+      const due = computeDue(fromMemberEntry(entry), byProgram.get(entry.pid) ?? []);
+      return { ...entry, dueC: due.dueCount, due: due.dueAmount };
+    }),
+  });
 }
 
 export function invalidateMembersIndexCache(trustId) {

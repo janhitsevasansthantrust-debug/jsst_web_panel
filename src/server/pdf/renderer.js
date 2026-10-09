@@ -67,6 +67,12 @@ export function registerFonts() {
     fonts: [
       { src: path.join(FONT_DIR, 'NotoSansDevanagari-Regular.ttf'), fontWeight: 'normal' },
       { src: path.join(FONT_DIR, 'NotoSansDevanagari-Bold.ttf'), fontWeight: 'bold' },
+      // Devanagari has no italic. Without these two entries any `fontStyle:
+      // 'italic'` (the amount-in-words line on the रसीद uses one) makes
+      // @react-pdf throw "Could not resolve font … italic" and the whole PDF
+      // fails — every receipt print returned a 500.
+      { src: path.join(FONT_DIR, 'NotoSansDevanagari-Regular.ttf'), fontWeight: 'normal', fontStyle: 'italic' },
+      { src: path.join(FONT_DIR, 'NotoSansDevanagari-Bold.ttf'), fontWeight: 'bold', fontStyle: 'italic' },
     ],
   });
 

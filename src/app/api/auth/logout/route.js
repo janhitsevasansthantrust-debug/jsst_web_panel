@@ -27,7 +27,13 @@ export async function GET(request) {
   const url = new URL(request.url);
   const next = url.searchParams.get('next');
 
-  const target = new URL('/login', url.origin);
+  // Each phone app has its own sign-in screen; send people back to theirs.
+  const loginPath = next && /^\/agent(\/|$)/.test(next)
+    ? '/agent/login'
+    : next && /^\/member(\/|$)/.test(next)
+      ? '/member/login'
+      : '/login';
+  const target = new URL(loginPath, url.origin);
   if (next && next.startsWith('/') && !next.startsWith('//')) {
     target.searchParams.set('next', next);
   }

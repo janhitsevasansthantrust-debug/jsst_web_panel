@@ -15,12 +15,26 @@ import { useT } from '../../../i18n/index.js';
 const { Text } = Typography;
 
 /**
+ * What is still payable on an entry.
+ *
+ * Mirrors `commission.netAmount` on the server rather than re-deriving the
+ * rule here — the same reasoning as everywhere else in this system: a screen
+ * that disagreed with the payout transaction would be worse than no screen.
+ */
+const netOf = (e) => Math.max(0, (e.amount ?? 0) - (e.reversedAmount ?? 0));
+
+/**
  * Agent commission.
  *
  * Entries are append-only and written inside the same transaction as the
  * payment that earned them, so commission can never drift from collections.
  * Settling a set of entries into a payout re-reads them inside a transaction
  * and refuses anything already paid.
+ *
+ * One more thing can reduce an entry after the fact: a closing being reverted.
+ * The money went back to the member, so the commission earned on it goes back
+ * to the agent. The entry stays, carrying what was taken, because an agent
+ * asking "why is my row smaller" deserves an answer.
  */
 export default function CommissionPage() {
   const t = useT();
@@ -148,7 +162,7 @@ export default function CommissionPage() {
                 selectedRowKeys: selected,
                 onChange: setSelected,
                 getCheckboxProps: (r) => ({
-                  disabled: r.status === 'paid' || r.status === 'cancelled',
+                  disabled: r.status === 'paid' || r.status === 'cancelled' || netOf(r) <= 0,
                 }),
               }}
               columns={[
@@ -179,19 +193,36 @@ export default function CommissionPage() {
                 },
                 { title: t('दर'), dataIndex: 'basis', width: 140 },
                 {
+                  /**
+                   * The figure earned, and — when a closing behind it was
+                   * reverted — what is left of it. Both are shown, because an
+                   * agent whose row silently shrank is owed an explanation, and
+                   * because the payout pays the net, never the gross.
+                   */
                   title: t('कमीशन'),
                   dataIndex: 'amount',
-                  width: 110,
+                  width: 130,
                   align: 'right',
-                  render: (v) => <Text strong>{inr(v)}</Text>,
+                  render: (v, r) => (
+                    <Space direction="vertical" size={0} style={{ alignItems: 'flex-end' }}>
+                      <Text strong>{inr(netOf(r))}</Text>
+                      {netOf(r) !== v ? (
+                        <Text type="secondary" style={{ fontSize: 11, textDecoration: 'line-through' }}>
+                          {inr(v)}
+                        </Text>
+                      ) : null}
+                    </Space>
+                  ),
                 },
                 {
                   title: t('स्थिति'),
                   dataIndex: 'status',
                   width: 100,
-                  render: (v) => (
+                  render: (v, r) => (
                     <Tag color={{ earned: 'orange', approved: 'blue', paid: 'green', cancelled: 'red' }[v]}>
-                      {{ earned: t('कमाया'), approved: t('स्वीकृत'), paid: t('भुगतान'), cancelled: t('रद्द') }[v] ?? v}
+                      {r.reversedAmount > 0
+                        ? t('कुछ वापस')
+                        : ({ earned: t('कमाया'), approved: t('स्वीकृत'), paid: t('भुगतान'), cancelled: t('रद्द') }[v] ?? v)}
                     </Tag>
                   ),
                 },
@@ -219,7 +250,10 @@ function PayoutModal({ open, agentId, entryIds, entries, onClose, onDone }) {
   const t = useT();
   const queryClient = useQueryClient();
 
-  const total = entries.reduce((s, e) => s + (e.amount ?? 0), 0);
+  // Net, not gross — this is the figure the payout transaction will use, and
+  // showing more than the agent will actually be handed is how a payout gets
+  // disputed at the counter.
+  const total = entries.reduce((s, e) => s + netOf(e), 0);
 
   const save = useMutation({
     mutationFn: (values) =>

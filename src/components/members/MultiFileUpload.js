@@ -6,6 +6,7 @@ import { UploadOutlined, DeleteOutlined, FileOutlined } from '@ant-design/icons'
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 import { storage } from '../../lib/firebase/client.js';
+import { api } from '../../lib/api.js';
 import { useT } from '../../i18n/index.js';
 
 const { Text } = Typography;
@@ -24,7 +25,8 @@ export default function MultiFileUpload({ label, value = [], onChange, max = 5, 
   const [busy, setBusy] = useState(false);
 
   async function handleUpload({ file }) {
-    if (!storage) {
+    const viaServer = folder === 'members' || folder === 'documents';
+    if (!viaServer && !storage) {
       message.error(t('Firebase Storage उपलब्ध नहीं — .env.local जाँचें'));
       return;
     }
@@ -35,12 +37,18 @@ export default function MultiFileUpload({ label, value = [], onChange, max = 5, 
 
     setBusy(true);
     try {
-      const safe = String(file.name).replace(/[^\w.\-]/g, '_');
-      const path = `${folder}/${Date.now()}_${safe}`;
-      const snap = await uploadBytes(storageRef(storage, path), file, {
-        contentType: file.type || 'application/octet-stream',
-      });
-      onChange([...value, await getDownloadURL(snap.ref)]);
+      let url;
+      if (viaServer) {
+        url = await api.uploads.memberDoc(file, folder);
+      } else {
+        const safe = String(file.name).replace(/[^\w.\-]/g, '_');
+        const path = `${folder}/${Date.now()}_${safe}`;
+        const snap = await uploadBytes(storageRef(storage, path), file, {
+          contentType: file.type || 'application/octet-stream',
+        });
+        url = await getDownloadURL(snap.ref);
+      }
+      onChange([...value, url]);
       message.success(t('अपलोड हो गया'));
     } catch (error) {
       message.error(t('अपलोड नहीं हुआ: {error}', { error: error.message }));
@@ -75,7 +83,7 @@ export default function MultiFileUpload({ label, value = [], onChange, max = 5, 
         ))}
 
         {value.length < max && (
-          <Upload showUploadList={false} customRequest={handleUpload} beforeUpload={sizeGuard(message, t)}>
+          <Upload showUploadList={false} accept="image/*,.pdf" customRequest={handleUpload} beforeUpload={sizeGuard(message, t)}>
             <Button icon={<UploadOutlined />} loading={busy} block>
               {t('अपलोड')} ({value.length}/{max})
             </Button>
@@ -87,8 +95,8 @@ export default function MultiFileUpload({ label, value = [], onChange, max = 5, 
 }
 
 const sizeGuard = (message, t) => (file) => {
-  if (file.size > 15 * 1024 * 1024) {
-    message.error(t('फ़ाइल 15MB से बड़ी है'));
+  if (file.size > 10 * 1024 * 1024) {
+    message.error(t('फ़ाइल 10MB से बड़ी है'));
     return Upload.LIST_IGNORE;
   }
   return true;

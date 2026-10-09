@@ -41,6 +41,9 @@ export const GET = handler(async (request, context) => {
       batch: sheet.batch,
       rows: sheet.rows,
       perMemberAmount: sheet.perMemberAmount,
+      // Read back from the closed member's own closing — the batch does not
+      // hold a card of its own any more.
+      closedMemberCardURL: sheet.closedMemberCardURL,
     }),
   );
 

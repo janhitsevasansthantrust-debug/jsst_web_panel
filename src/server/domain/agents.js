@@ -1,9 +1,9 @@
 import 'server-only';
 
 import { db, adminAuth, serverNow, inc, countQuery } from '../firebase/admin.js';
-import { resolvePolicy, summariseEntries, computePayout, round2 } from './commission.js';
+import { resolvePolicy, summariseEntries, computePayout, netAmount, round2 } from './commission.js';
 import { renameAgentInIndex } from './indexes.js';
-import { badRequest, conflict, notFound } from '../http.js';
+import { badRequest, conflict, notFound } from '../errors.js';
 import {
   COMMISSION_STATUS,
   LIMITS,
@@ -254,6 +254,84 @@ function assertNotSelf(scope, agent, action) {
   }
 }
 
+/**
+ * Write to an agent's Firebase Auth account — creating it when it is missing.
+ *
+ * An agent document can point at a uid that has no Auth account in THIS
+ * Firebase project: agents carried over from the old system by the migration
+ * keep their old uid, and the account may never have existed here (or was
+ * deleted by hand in the console). Every write to Auth then failed with
+ * `auth/user-not-found` and the screen answered a bare 500 — a handover,
+ * password reset or email change for that agent was simply impossible.
+ *
+ * Now the account is created with the SAME uid, because the agent id is the
+ * uid: members, receipts and commission all point at it, and a new uid would
+ * orphan them. The role claims are written at the same time so the new login
+ * actually opens the agent's own data.
+ *
+ * `create` must carry an email when the account may need creating; without
+ * one there is nothing to sign in with, and the caller is told so plainly.
+ */
+async function writeAgentAuth(scope, agentId, agent, update, { create } = {}) {
+  const uid = agent.uid || agentId;
+  try {
+    await adminAuth.updateUser(uid, update);
+    return { uid, created: false };
+  } catch (error) {
+    if (error?.code !== 'auth/user-not-found') throw error;
+  }
+
+  const email = (update.email ?? create?.email ?? agent.email ?? '').trim().toLowerCase();
+  if (!email) {
+    throw badRequest(
+      'इस एजेंट का लॉगिन खाता मौजूद नहीं है और कोई ईमेल भी नहीं है — ' +
+        'संपादित करके ईमेल डालें, फिर पासवर्ड बनाएँ।',
+    );
+  }
+
+  const clash = await adminAuth.getUserByEmail(email).catch(() => null);
+  if (clash && clash.uid !== uid) {
+    throw conflict(
+      `ईमेल ${email} किसी और लॉगिन खाते में है — इस एजेंट के लिए दूसरा ईमेल डालें`,
+      { email },
+    );
+  }
+
+  await adminAuth.createUser({
+    uid,
+    email,
+    password: update.password ?? create?.password ?? generatePassword(),
+    displayName: update.displayName ?? agent.displayName ?? '',
+    emailVerified: true,
+    disabled: update.disabled ?? false,
+  });
+
+  await adminAuth.setCustomUserClaims(uid, {
+    role: ROLE.AGENT,
+    trustId: scope.trustId,
+    programId: agent.programId ?? scope.programId ?? null,
+    agentId,
+    memberId: null,
+    permissions: [],
+  });
+
+  // Keep the document pointing at the account that now exists.
+  if (agent.uid !== uid) {
+    await db.doc(paths.agent(scope.trustId, agentId)).update({ uid });
+  }
+
+  return { uid, created: true };
+}
+
+/** Revoke sessions, ignoring an account that does not exist (nothing to revoke). */
+async function revokeAgent(uid) {
+  try {
+    await adminAuth.revokeRefreshTokens(uid);
+  } catch (error) {
+    if (error?.code !== 'auth/user-not-found') throw error;
+  }
+}
+
 export async function updateAgent(scope, agentId, patch) {
   const ref = db.doc(paths.agent(scope.trustId, agentId));
   const snap = await ref.get();
@@ -266,11 +344,11 @@ export async function updateAgent(scope, agentId, patch) {
   const nextEmail = patch.email?.trim().toLowerCase();
   if (nextEmail && nextEmail !== String(before.email ?? '').toLowerCase()) {
     const clash = await adminAuth.getUserByEmail(nextEmail).catch(() => null);
-    if (clash && clash.uid !== before.uid) {
+    if (clash && clash.uid !== (before.uid || agentId)) {
       throw conflict('यह ईमेल किसी और खाते में पहले से है', { email: nextEmail });
     }
 
-    await adminAuth.updateUser(before.uid, { email: nextEmail, emailVerified: true });
+    await writeAgentAuth(scope, agentId, before, { email: nextEmail, emailVerified: true });
     changes.email = nextEmail;
   } else {
     delete changes.email;
@@ -298,15 +376,18 @@ export async function updateAgent(scope, agentId, patch) {
     patch.displayName && patch.displayName.trim() !== String(before.displayName ?? '').trim();
 
   if (renamed) {
-    await adminAuth.updateUser(before.uid, { displayName: patch.displayName.trim() });
+    // A missing login is not this edit's business — the name is still saved.
+    await adminAuth.updateUser(before.uid || agentId, { displayName: patch.displayName.trim() })
+      .catch((error) => { if (error?.code !== 'auth/user-not-found') throw error; });
     changes.displayName = patch.displayName.trim();
   }
 
   /* ── active: the document flag alone stops nothing ───────────────────── */
   if (patch.active !== undefined && patch.active !== before.active) {
     if (patch.active === false) assertNotSelf(scope, before, 'बंद करना');
-    await adminAuth.updateUser(before.uid, { disabled: patch.active === false });
-    if (patch.active === false) await adminAuth.revokeRefreshTokens(before.uid);
+    await adminAuth.updateUser(before.uid || agentId, { disabled: patch.active === false })
+      .catch((error) => { if (error?.code !== 'auth/user-not-found') throw error; });
+    if (patch.active === false) await revokeAgent(before.uid || agentId);
   }
 
   await ref.update({
@@ -385,20 +466,15 @@ export async function resetAgentPassword(scope, agentId) {
   const agent = snap.data();
   assertNotSelf(scope, agent, 'पासवर्ड बदलना');
 
-  if (!agent.uid) {
-    throw badRequest(
-      'इस एजेंट का लॉगिन खाता नहीं है, इसलिए पासवर्ड बनाया नहीं जा सकता — ' +
-        'इन्हें संपादित करके ईमेल डालें।',
-    );
-  }
-
   const password = generatePassword();
-  await adminAuth.updateUser(agent.uid, { password });
+  // Creates the login when the agent has none yet (e.g. carried over from the
+  // old system) — "reset password" is then simply "give them a password".
+  const { uid } = await writeAgentAuth(scope, agentId, agent, { password, disabled: false });
 
   // Revocation is the point: without it the old password stays usable
   // alongside the new one. `verifySessionCookie(cookie, true)` honours it, so
   // this agent is signed out of every device within the same request.
-  await adminAuth.revokeRefreshTokens(agent.uid);
+  await revokeAgent(uid);
 
   return { password, email: agent.email };
 }
@@ -452,7 +528,7 @@ export async function handoverAgent(scope, agentId, input) {
   // refuse, and silently adopting that other account would hand this agent's
   // members to whoever owns it.
   const clash = await adminAuth.getUserByEmail(email).catch(() => null);
-  if (clash && clash.uid !== before.uid) {
+  if (clash && clash.uid !== (before.uid || agentId)) {
     throw conflict(
       'यह ईमेल किसी और खाते में पहले से है — दूसरा ईमेल इस्तेमाल करें',
       { email },
@@ -461,7 +537,10 @@ export async function handoverAgent(scope, agentId, input) {
 
   const password = input.password || generatePassword();
 
-  await adminAuth.updateUser(before.uid, {
+  // Re-points the existing login at the new person — or, when the agent has
+  // no login in this project at all (carried over from the old system), gives
+  // the new person one under the same uid, so the agent id does not change.
+  const { uid } = await writeAgentAuth(scope, agentId, before, {
     email,
     password,
     displayName: input.displayName,
@@ -471,7 +550,7 @@ export async function handoverAgent(scope, agentId, input) {
 
   // The outgoing person's session cookie would otherwise keep working for up
   // to two weeks — long after they have handed over the round.
-  await adminAuth.revokeRefreshTokens(before.uid);
+  await revokeAgent(uid);
 
   const entry = {
     fromName: before.displayName ?? '',
@@ -630,6 +709,13 @@ export async function createPayout(scope, input) {
       }
       if (e.status === COMMISSION_STATUS.CANCELLED) {
         skipped.push({ id: snap.id, reason: 'cancelled' });
+        return;
+      }
+      // A closing was reverted after this was earned, so what is left of the
+      // entry is smaller than the figure printed on the screen. Paying the
+      // gross would hand the agent money for a collection that went back.
+      if (netAmount(e) <= 0) {
+        skipped.push({ id: snap.id, reason: 'fully_reversed' });
         return;
       }
       payable.push({ ref: entryRefs[i], id: snap.id, ...e });

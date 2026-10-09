@@ -18,7 +18,7 @@ import { getActiveProgramId, setActiveProgramId } from './activeProgram.js';
  * program and the one screen that could fix the stale id would be the one that
  * could never load. Auth and setup are not program-scoped at all.
  */
-const NOT_PROGRAM_SCOPED = /^\/(programs(\?|$)|auth\/|setup(\?|$)|health(\?|$)|branding(\?|$))/;
+const NOT_PROGRAM_SCOPED = /^\/(programs(\?|$)|auth\/|setup(\?|$)|health(\?|$)|branding(\?|$)|portal\/)/;
 
 /**
  * Attach the active योजना to every request.
@@ -108,7 +108,37 @@ const qs = (params) => {
   return str ? `?${str}` : '';
 };
 
+/**
+ * Upload a member photo / document through the server (see
+ * /api/uploads/member-doc) rather than straight to Storage, so it never
+ * depends on Storage security rules being deployed.
+ */
+async function uploadMemberDoc(file, folder = 'members') {
+  const body = new FormData();
+  body.set('file', file, file.name || 'upload.jpg');
+  body.set('folder', folder);
+  const response = await fetch(apiUrl('/uploads/member-doc'), { method: 'POST', credentials: 'same-origin', body });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || payload?.ok === false) {
+    throw new ApiError(payload?.error ?? `अपलोड नहीं हुआ (${response.status})`, { status: response.status, code: payload?.code });
+  }
+  return payload.url;
+}
+
 export const api = {
+  uploads: { memberDoc: uploadMemberDoc },
+
+  /** The phone app's switches — maintenance, update versions, support numbers. */
+  memberLogins: {
+    backfill: () => request('/members/logins/backfill', { method: 'POST', body: {} }),
+  },
+
+  appConfig: {
+    get: () => request('/app/config'),
+    update: (body) => request('/app/config', { method: 'PATCH', body }),
+    paymentPreview: (amount) => request(`/app/payment?preview=1&amount=${Number(amount) || 0}&note=TEST`),
+  },
+
   /* auth */
   session: {
     create: (idToken) => request('/auth/session', { method: 'POST', body: { idToken } }),
@@ -173,6 +203,8 @@ export const api = {
 
   /* closings */
   closings: {
+    report: (params) => request(`/closings/collection${qs(params)}`),
+    billsUrl: (params) => apiUrl(`/closings/bills${qs(params)}`),
     list: (params) => request(`/closings${qs(params)}`),
     create: (body) => request('/closings', { method: 'POST', body }),
     collection: (id, params) => request(`/closings/${id}/collection${qs(params)}`),
@@ -271,6 +303,19 @@ export const api = {
     cancel: (id, reason) =>
       request(`/payments/${id}/cancel`, { method: 'POST', body: { reason } }),
     list: (params) => request(`/payments${qs(params)}`),
+    /**
+     * The whole filtered register as totals — the figures at the top of the
+     * report page.
+     *
+     * A separate call from `list` on purpose: the totals are worked out over
+     * every receipt the filter matches, while `list` returns one screenful. A
+     * total derived from the rows that happen to be loaded would grow as the
+     * operator scrolls, and a collection figure that moves is not a figure.
+     */
+    report: (params) => request(`/payments/report${qs({ ...params, format: 'json' })}`),
+    /** The same filters as a file. A URL, because it goes to `fetch` + download. */
+    reportUrl: (params, format) =>
+      apiUrl(`/payments/report${qs({ ...params, format })}`),
   },
 
   /* reference lists — states, districts, relations… */
@@ -345,6 +390,56 @@ export const api = {
     handover: (id, body) => request(`/agents/${id}/handover`, { method: 'POST', body }),
   },
 
+  /**
+   * The agent's phone app. Every call is scoped on the server to the signed-in
+   * agent; the योजना comes from the active program like everywhere else.
+   */
+  agentApp: {
+    overview: () => request('/agent/overview'),
+    closings: () => request('/agent/closings'),
+    closing: (id) => request(`/agent/closings/${id}`),
+    member: (id) => request(`/agent/members/${id}`),
+    commission: () => request('/agent/commission'),
+    /** Who owes / who paid one closing — a sheet for the round. */
+    closingPdfUrl: (id, mode = 'pending') => apiUrl(`/agent/closings/${id}/pdf${qs({ mode })}`),
+    /** The whole योजना's pending / paid / joining-fee list for this agent. */
+    duesPdfUrl: (mode = 'pending') => apiUrl(`/agent/dues-pdf${qs({ mode })}`),
+    /** One member's closing-by-closing statement. */
+    memberPdfUrl: (id, mode = 'all', programId) =>
+      apiUrl(`/agent/members/${id}/pdf${qs({ mode, programId })}`),
+    /** सदस्यता प्रमाण पत्र — checked against the member's own योजना. */
+    certificateUrl: (id, programId) =>
+      apiUrl(`/members/${id}/document${qs({ type: 'certificate', programId })}`),
+  },
+
+  /** सदस्य अनुरोध — agent asks, office approves / rejects / removes. */
+  memberRequests: {
+    list: (params) => request(`/member-requests${qs(params)}`),
+    pendingCount: () => request('/member-requests?count=pending'),
+    get: (id) => request(`/member-requests/${id}`),
+    create: (body) => request('/member-requests', { method: 'POST', body }),
+    resubmit: (id, body) => request(`/member-requests/${id}`, { method: 'PUT', body }),
+    approve: (id, body = {}) =>
+      request(`/member-requests/${id}`, { method: 'PATCH', body: { action: 'approve', ...body } }),
+    reject: (id, reason) =>
+      request(`/member-requests/${id}`, { method: 'PATCH', body: { action: 'reject', reason } }),
+    remove: (id) => request(`/member-requests/${id}`, { method: 'DELETE' }),
+  },
+
+  /** The member's own app. Not योजना-scoped: a family spans several. */
+  portal: {
+    home: () => request('/portal/home'),
+    member: (id) => request(`/portal/members/${id}`),
+    pdfUrl: (id, doc = 'statement', mode) => `/api/portal/members/${id}/pdf${qs({ doc, mode })}`,
+    receiptUrl: (id, memberId) => `/api/portal/receipts/${id}${qs({ memberId })}`,
+  },
+
+  /** A member's login for the member app — set by the office. */
+  memberLogin: {
+    get: (id) => request(`/members/${id}/login`),
+    set: (id, body = {}) => request(`/members/${id}/login`, { method: 'POST', body }),
+  },
+
   commission: {
     payouts: (params) => request(`/commission/payouts${qs(params)}`),
     createPayout: (body) =>
@@ -379,4 +474,14 @@ export const keys = {
   team: ['trust', 'team'],
   payments: (params) => ['payments', params],
   payouts: (params) => ['payouts', params],
+  agentOverview: (programId) => ['agent-app', 'overview', programId],
+  agentClosings: (programId) => ['agent-app', 'closings', programId],
+  agentClosing: (id) => ['agent-app', 'closing', id],
+  agentMember: (id) => ['agent-app', 'member', id],
+  agentCommission: (programId) => ['agent-app', 'commission', programId],
+  memberRequests: (params) => ['member-requests', params],
+  memberRequestsPending: ['member-requests', 'pending-count'],
+  portalHome: ['portal', 'home'],
+  portalMember: (id) => ['portal', 'member', id],
+  memberLogin: (id) => ['member', id, 'login'],
 };

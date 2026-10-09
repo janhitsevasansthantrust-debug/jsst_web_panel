@@ -11,7 +11,7 @@
  * at target scale. We store none of them. An obligation is DERIVED:
  *
  *     member M owes closing C  ⟺  M joined on or before C's date
- *                              ∧  M had not exited on or before C's date
+ *                              ∧  C is on or before M's closing date
  *                              ∧  M is not C's own member
  *                              ∧  C is not reverted
  *
@@ -86,7 +86,7 @@ function toPartialMap(obj) {
  * Boundary rules, chosen to match the trust's real-world practice and the
  * behaviour of the old Cloud Functions:
  *   • joined ON the closing date  → owes (joinDateMs <= closing.dateMs)
- *   • exited ON the closing date  → does NOT owe (exitDateMs <= closing.dateMs)
+ *   • closed ON the closing date → owes other members' closings that day
  *   • the closing's own member    → never owes
  *
  * @param {{id?:string, joinDateMs?:number, exitDateMs?:number|null}} member
@@ -94,8 +94,10 @@ function toPartialMap(obj) {
  */
 export function isEligible(member, closing) {
   if (!member || !closing) return false;
-  if (closing.status === 'reverted') return false;
+  if (closing.status && closing.status !== 'active') return false;
   if (!Number.isFinite(closing.dateMs)) return false;
+  if (member.delete_flag || member.status === MEMBER_STATUS.PENDING) return false;
+  if (member.joinDateMs == null) return false;
 
   const joinMs = Number(member.joinDateMs);
   if (!Number.isFinite(joinMs)) return false;
@@ -120,9 +122,12 @@ export function isEligible(member, closing) {
     return false;
   }
 
-  const exitMs = member.exitDateMs;
+  const exitMs = member.closingDateMs ?? member.exitDateMs;
+  if (member.status === MEMBER_STATUS.CLOSED && exitMs == null) return false;
   if (exitMs != null && Number.isFinite(Number(exitMs))) {
-    if (Number(exitMs) <= closing.dateMs) return false;
+    const isClosing = member.status === MEMBER_STATUS.CLOSED ||
+      member.exitReason === 'closed' || member.closingDateMs != null;
+    if (isClosing ? Number(exitMs) < closing.dateMs : Number(exitMs) <= closing.dateMs) return false;
   }
 
   return true;
@@ -213,6 +218,7 @@ export function computeDue(member, closings) {
       fatherName: closing.fatherName ?? '',
       village: closing.village ?? '',
       dateMs: closing.dateMs,
+      batchId: closing.batchId ?? null,
       amount,
       alreadyPaid: already,
       remaining,
@@ -498,6 +504,72 @@ export function reversePayment(member, seqs, closings) {
   };
 }
 
+/** Undo only the money on these receipt lines, preserving other instalments. */
+export function reverseReceiptItems(member, items, closings) {
+  const ledger = readLedger(member);
+  const bySeq = new Map(closings.map((c) => [c.seq, c]));
+  const paidSet = new Set(ledger.paidSeqs);
+  const partialPaid = { ...ledger.partialPaid };
+  const targets = (items ?? []).filter((item) =>
+    Number.isInteger(item.seq) && Number(item.amount) > 0,
+  );
+  if (!targets.length) {
+    const due = computeDue(member, closings);
+    return { ledger, counters: { paidCountDelta: 0, paidAmountDelta: 0, dueCount: due.dueCount, dueAmount: due.dueAmount } };
+  }
+
+  let watermark = ledger.paidUpTo;
+  const lowest = Math.min(...targets.map((item) => item.seq));
+  if (lowest <= watermark) {
+    for (let seq = lowest; seq <= watermark; seq += 1) {
+      const closing = bySeq.get(seq);
+      if (closing && isEligible(member, closing)) paidSet.add(seq);
+    }
+    watermark = lowest - 1;
+  }
+
+  let amountDelta = 0;
+  let countDelta = 0;
+  const lines = [];
+  for (const item of targets) {
+    const closing = bySeq.get(item.seq);
+    if (!closing) throw new Error(`Closing #${item.seq} is missing from the index`);
+    const amount = Number(item.amount);
+    const settled = paidSet.has(item.seq);
+    const already = settled ? amountFor(member, closing) : (partialPaid[item.seq] ?? 0);
+    if (amount > already + 0.009) {
+      throw new Error(`Receipt amount exceeds recorded payment for closing #${item.seq}`);
+    }
+    const remaining = Math.round((already - amount) * 100) / 100;
+    if (settled) {
+      paidSet.delete(item.seq);
+      countDelta -= 1;
+    }
+    lines.push({ seq: item.seq, paidCountDelta: settled ? -1 : 0 });
+    if (remaining > 0) partialPaid[item.seq] = remaining;
+    else delete partialPaid[item.seq];
+    amountDelta -= amount;
+  }
+
+  const next = compactLedger({
+    paidUpTo: watermark,
+    paidSeqs: [...paidSet].sort((a, b) => a - b),
+    exemptSeqs: ledger.exemptSeqs,
+    partialPaid,
+  }, member, closings);
+  const due = computeDue({ ...member, ...next }, closings);
+  return {
+    ledger: next,
+    lines,
+    counters: {
+      paidCountDelta: countDelta,
+      paidAmountDelta: Math.round(amountDelta * 100) / 100,
+      dueCount: due.dueCount,
+      dueAmount: due.dueAmount,
+    },
+  };
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
    Exemptions
    ══════════════════════════════════════════════════════════════════════════ */
@@ -545,6 +617,7 @@ export function applyExemption(member, seqs, closings) {
  */
 export function rebuildLedger(member, closings, payments) {
   const paidSeqs = new Set();
+  const totals = new Map();
   let paidAmount = 0;
   let paidCount = 0;
 
@@ -552,20 +625,28 @@ export function rebuildLedger(member, closings, payments) {
     if (p.status === 'cancelled' || p.delete_flag === true) continue;
     for (const item of p.items ?? []) {
       if (item.seq == null) continue;
-      if (item.full === false) continue; // partials handled below
-      if (!paidSeqs.has(item.seq)) {
-        paidSeqs.add(item.seq);
-        paidCount += 1;
-      }
-      paidAmount += Number(item.amount) || 0;
+      if (p.reversedSeqs?.includes(item.seq)) continue;
+      const amount = Number(item.amount) || 0;
+      totals.set(item.seq, (totals.get(item.seq) ?? 0) + amount);
+      paidAmount += amount;
     }
+  }
+
+  const partialPaid = {};
+  for (const closing of closings) {
+    const total = Math.round((totals.get(closing.seq) ?? 0) * 100) / 100;
+    if (total <= 0) continue;
+    if (total + 0.009 >= amountFor(member, closing)) {
+      paidSeqs.add(closing.seq);
+      paidCount += 1;
+    } else partialPaid[closing.seq] = total;
   }
 
   const base = {
     paidUpTo: 0,
     paidSeqs: [...paidSeqs].sort((a, b) => a - b),
     exemptSeqs: toSortedUniqueInts(member.exemptSeqs),
-    partialPaid: {},
+    partialPaid,
   };
 
   const compacted = compactLedger(base, member, closings);

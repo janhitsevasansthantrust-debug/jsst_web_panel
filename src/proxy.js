@@ -33,7 +33,18 @@ import { SESSION_COOKIE } from './config/constants.js';
  * to /login is harmless; the page itself forwards them on. A loop is not.
  */
 
-const PUBLIC_PATHS = ['/login', '/forgot-password'];
+const PUBLIC_PATHS = ['/login', '/forgot-password', '/agent/login', '/member/login'];
+
+/**
+ * The two phone apps have their own sign-in screens, so a signed-out visitor
+ * to either is sent to THAT app's login rather than the office one.
+ * `/member` must not match `/members` (the office list), hence the exact test.
+ */
+function loginFor(pathname) {
+  if (pathname === '/agent' || pathname.startsWith('/agent/')) return '/agent/login';
+  if (pathname === '/member' || pathname.startsWith('/member/')) return '/member/login';
+  return '/login';
+}
 const PUBLIC_API = [
   '/api/auth/session',
   '/api/auth/logout',
@@ -43,11 +54,17 @@ const PUBLIC_API = [
   // unbranded one in the app. Nothing here is private — it is printed across
   // the top of every receipt the trust hands out.
   '/api/branding',
+  // The phone app's sign-in: password in, bearer token out.
+  '/api/auth/mobile',
+  // The phone app's start-up check: maintenance switch + update versions.
+  '/api/app/status',
 ];
 
 export function proxy(request) {
   const { pathname } = request.nextUrl;
-  const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value);
+  // The phone app sends its session as a bearer token instead of a cookie.
+  const hasSession = Boolean(request.cookies.get(SESSION_COOKIE)?.value)
+    || /^Bearer\s+\S/.test(request.headers.get('authorization') ?? '');
 
   if (pathname.startsWith('/api/')) {
     if (PUBLIC_API.some((p) => pathname.startsWith(p))) return NextResponse.next();
@@ -64,7 +81,7 @@ export function proxy(request) {
 
   if (!hasSession && !isPublic) {
     const url = request.nextUrl.clone();
-    url.pathname = '/login';
+    url.pathname = loginFor(pathname);
     url.searchParams.set('next', pathname);
     return NextResponse.redirect(url);
   }
@@ -75,6 +92,6 @@ export function proxy(request) {
 export const config = {
   matcher: [
     // Everything except Next internals, static files and the favicon.
-    '/((?!_next/static|_next/image|favicon.ico|fonts/|images/|.*\\.(?:png|jpg|jpeg|svg|webp|ico|ttf|woff2?)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|sw.js|fonts/|images/|.*\\.(?:png|jpg|jpeg|svg|webp|ico|ttf|woff2?|webmanifest)$).*)',
   ],
 };

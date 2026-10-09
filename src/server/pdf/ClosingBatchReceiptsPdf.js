@@ -45,7 +45,7 @@ export function ClosingBatchReceiptsPdf({ trust, program, batch, bills, startSer
 
           <View style={s.titleRow}>
             <View style={s.titleBadge}>
-              <Text style={s.title}>सहयोग राशि रसीद</Text>
+               <Text style={s.title}>सहयोग राशि वसूली पर्ची — भुगतान बाकी</Text>
             </View>
           </View>
 
@@ -92,7 +92,7 @@ export function ClosingBatchReceiptsPdf({ trust, program, batch, bills, startSer
               <Text style={[s.h, s.cCode]}>कोड</Text>
               <Text style={[s.h, s.cName]}>नाम</Text>
               <Text style={[s.h, s.cDate]}>दिनांक</Text>
-              <Text style={[s.h, s.cPhone]}>मोबाइल न.</Text>
+               <Text style={[s.h, s.cPhone]}>बाकी राशि</Text>
             </View>
 
             {bill.closings.map((c, n) => (
@@ -105,7 +105,7 @@ export function ClosingBatchReceiptsPdf({ trust, program, batch, bills, startSer
                   {c.village ? `  ${c.village}` : ''}
                 </Text>
                 <Text style={[s.d, s.cDate]}>{hiDate(c.dateMs)}</Text>
-                <Text style={[s.d, s.cPhone]}>{c.phone || '—'}</Text>
+                 <Text style={[s.d, s.cPhone]}>{inr(c.remaining ?? bill.rate)}</Text>
               </View>
             ))}
           </View>
@@ -127,8 +127,7 @@ export function ClosingBatchReceiptsPdf({ trust, program, batch, bills, startSer
                 <Text style={s.note}>{batch.paymentNote}</Text>
               ) : null}
               <Text style={s.note}>
-                Note: {batch.name} सहयोग राशि — यह सहयोग राशि स्वैच्छिक है एवं
-                गैर-वापसीयोग्य है।
+                 यह बकाया वसूली पर्ची है। भुगतान जमा होने के बाद अलग क्रमांक वाली भुगतान रसीद प्राप्त करें।
               </Text>
             </View>
 

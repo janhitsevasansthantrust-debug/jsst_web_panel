@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { db, serverNow } from '../firebase/admin.js';
-import { badRequest, notFound } from '../http.js';
+import { badRequest, notFound } from '../errors.js';
 import { MASTER_TYPES, paths } from '../../config/constants.js';
 import {
   states, districtsByState, gender, relations, paymentMethods, closingTypes,

@@ -1,8 +1,8 @@
 import 'server-only';
 
 import { db, serverNow, inc, getAllDocs } from '../firebase/admin.js';
-import { getClosingsIndex, patchClosingInIndex } from './indexes.js';
-import { badRequest, conflict, notFound } from '../http.js';
+import { getClosingsIndex, invalidateIndexCache } from './indexes.js';
+import { badRequest, conflict, notFound } from '../errors.js';
 import { paths, LIMITS, CLOSING_STATUS } from '../../config/constants.js';
 import { batchCode, selectBatchRows, summariseBatch } from '../../lib/closingBatch.js';
 
@@ -53,12 +53,92 @@ export async function listBatches(scope, { includeClosed = true } = {}) {
   return { batches };
 }
 
+/**
+ * Read the closed member off the closings index and return everything the batch
+ * needs to carry about them.
+ *
+ * The name and reg. no. are denormalised onto the batch so the list renders and
+ * the notice prints without a read per row — the same reason closings denormalise
+ * `batchName` onto themselves.
+ *
+ * Validated against the index rather than the members collection on purpose:
+ * "बंद हुआ सदस्य" means a member who HAS closed, and the closings index is the
+ * cheapest honest answer to that question. Accepting an arbitrary member id would
+ * let a batch claim a card belonging to somebody still paying instalments.
+ */
+async function readClosedMember(trustId, programId, memberId) {
+  const none = {
+    closedMemberId: null,
+    closedMemberName: '',
+    closedMemberRegNo: '',
+  };
+  if (!memberId) return none;
+
+  const { items } = await getClosingsIndex(trustId, programId);
+  const own = items.filter((c) => (c.memberId ?? null) === memberId);
+  if (!own.length) {
+    throw badRequest(
+      'यह सदस्य किसी क्लोजिंग के साथ नहीं जुड़ा है — निमंत्रण पत्र के लिए बंद हुआ सदस्य चुनें',
+    );
+  }
+
+  const newest = (a, b) => (b.dateMs ?? 0) - (a.dateMs ?? 0) || (b.seq ?? 0) - (a.seq ?? 0);
+  // Most recent active closing: the one whose card belongs on a sheet issued
+  // today. A reverted closing is skipped where possible — its card was withdrawn
+  // with it — but a member whose only closing was reverted still names a card,
+  // because otherwise the batch could not be attributed to anybody.
+  const latest =
+    own.filter((c) => c.status === CLOSING_STATUS.ACTIVE).sort(newest)[0] ??
+    [...own].sort(newest)[0];
+
+  return {
+    closedMemberId: memberId,
+    closedMemberName: latest.name ?? '',
+    closedMemberRegNo: latest.regNo ?? '',
+  };
+}
+
+/**
+ * The closed member's own invitation card, read back from their closing.
+ *
+ * Not stored on the batch. One card belongs to one family, and it is already on
+ * the closing — this reads it for the notice rather than keeping a second copy
+ * that could disagree with the one printed on that member's समापन पत्र.
+ */
+async function readClosedMemberCard(scope, batch) {
+  if (!batch.closedMemberId) return '';
+  try {
+    const { items } = await getClosingsIndex(scope.trustId, scope.programId);
+    const ids = items
+      .filter((c) => (c.memberId ?? null) === batch.closedMemberId)
+      .sort((a, b) => (b.dateMs ?? 0) - (a.dateMs ?? 0) || (b.seq ?? 0) - (a.seq ?? 0))
+      .map((c) => c.id);
+    if (!ids.length) return '';
+
+    // All of that member's closings in one call, not one read each. The card
+    // lives on the closing document, which the index deliberately does not carry.
+    const snaps = await db.getAll(
+      ...ids.map((id) => db.doc(paths.closing(scope.trustId, scope.programId, id))),
+    );
+    for (const snap of snaps) {
+      const url = snap.data()?.invitationCardURL;
+      if (url) return url;
+    }
+  } catch {
+    // A card that cannot be fetched must not stop the notice printing. The
+    // sheet without it is still a correct sheet; a failed notice is not.
+  }
+  return '';
+}
+
 export async function createBatch(scope, input) {
   const { trustId, programId, uid } = scope;
 
   const ref = db
     .collection(paths.closingBatches(trustId, programId))
     .doc();
+
+  const closed = await readClosedMember(trustId, programId, input.closedMemberId);
 
   const batch = {
     name: input.name,
@@ -78,7 +158,15 @@ export async function createBatch(scope, input) {
 
     /** The line at the bottom of the notice — where and how to pay. */
     paymentNote: input.paymentNote ?? '',
-    invitationCardURL: input.invitationCardURL ?? '',
+
+    /**
+     * Whose card the notice carries, and who that is.
+     *
+     * Pure stationery, like the rest of the batch: it does NOT scope which
+     * closings are on the sheet — the ⊞ button does that — and it cannot move
+     * a rupee, because nothing in `ledger` reads a batch.
+     */
+    ...closed,
 
     closingCount: 0,
     perMemberAmount: 0,
@@ -101,11 +189,17 @@ export async function updateBatch(scope, batchId, input) {
 
   const patch = { updatedAt: serverNow(), updatedBy: scope.uid };
 
-  for (const field of ['name', 'description', 'dueDate', 'paymentNote', 'invitationCardURL']) {
+  for (const field of ['name', 'description', 'dueDate', 'paymentNote']) {
     if (input[field] !== undefined) patch[field] = input[field];
   }
   if (input.dueDateMs !== undefined) {
     patch.dueDateMs = Number.isFinite(Number(input.dueDateMs)) ? Number(input.dueDateMs) : null;
+  }
+  if (input.closedMemberId !== undefined) {
+    Object.assign(
+      patch,
+      await readClosedMember(scope.trustId, scope.programId, input.closedMemberId),
+    );
   }
   if (input.status !== undefined) patch.status = input.status === 'issued' ? 'issued' : 'open';
 
@@ -179,7 +273,16 @@ export async function getBatchSheet(scope, batchId) {
   const batch = { id: batchId, ...snap.data(), createdAt: null, updatedAt: null };
   const rows = selectBatchRows(index.items, batchId);
 
-  return { batch, ...summariseBatch(rows) };
+  return {
+    batch,
+    /**
+     * Derived here, not stored: the card comes from the closed member's own
+     * closing so there is exactly one copy of it in the system. Costs one read
+     * and only when a batch names somebody.
+     */
+    closedMemberCardURL: await readClosedMemberCard(scope, batch),
+    ...summariseBatch(rows),
+  };
 }
 
 /**
@@ -253,74 +356,45 @@ export async function setClosingBatch(scope, batchId, closingIds, { batchName } 
     );
   }
 
-  // The destination must exist and still be open. Checked once, before any
-  // write, so a bad id cannot leave half the closings moved.
-  let name = batchName ?? null;
-  if (batchId) {
-    const resolved = await resolveBatch(scope, batchId);
-    name = resolved.batchName;
-  }
-
+  await getClosingsIndex(trustId, programId);
   const refs = ids.map((id) => db.doc(paths.closing(trustId, programId, id)));
-  const snaps = await getAllDocs(refs);
-
-  /** batchId → how many closings joined or left it. */
-  const deltas = new Map();
-  const moved = [];
-
-  const batch = db.batch();
-
-  snaps.forEach((snap, i) => {
-    if (!snap.exists) return;
-
-    const closing = snap.data();
-    const from = closing.batchId ?? null;
-
-    // Already where it is being sent. Skipped rather than rewritten, so
-    // pressing the button twice does not double the counters.
-    if (from === (batchId ?? null)) return;
-
-    /**
-     * A closing cannot be pulled out of a batch that has been issued.
-     *
-     * The notice listing it has been handed out and members have been asked
-     * for the money. Removing it afterwards would leave them holding a bill
-     * for something the system says was never billed.
-     */
-    if (from) deltas.set(from, (deltas.get(from) ?? 0) - 1);
-    if (batchId) deltas.set(batchId, (deltas.get(batchId) ?? 0) + 1);
-
-    batch.update(refs[i], {
-      batchId: batchId ?? null,
-      batchName: batchId ? name : null,
-      updatedAt: serverNow(),
-      updatedBy: scope.uid,
+  const indexRef = db.doc(paths.closingsIndex(trustId, programId));
+  const moved = await db.runTransaction(async (tx) => {
+    const snaps = await tx.getAll(...refs);
+    const indexSnap = await tx.get(indexRef);
+    if (snaps.some((snap) => !snap.exists)) throw notFound('क्लोजिंग नहीं मिली');
+    if (snaps.some((snap) => snap.data().status !== CLOSING_STATUS.ACTIVE)) {
+      throw conflict('सिर्फ़ चालू क्लोजिंग समूह में रखी जा सकती है');
+    }
+    const batchIds = [...new Set([batchId, ...snaps.map((s) => s.data().batchId)].filter(Boolean))];
+    const batchSnaps = batchIds.length ? await tx.getAll(...batchIds.map((id) =>
+      db.doc(paths.closingBatch(trustId, programId, id)))) : [];
+    if (batchSnaps.some((s) => !s.exists || s.data().status !== 'open')) {
+      throw conflict('जारी समूह की क्लोजिंग बदली नहीं जा सकती');
+    }
+    const name = batchSnaps.find((s) => s.id === batchId)?.data().name ?? null;
+    const deltas = new Map();
+    const changes = [];
+    snaps.forEach((snap, i) => {
+      const closing = snap.data();
+      const from = closing.batchId ?? null;
+      if (from === (batchId ?? null)) return;
+      if (from) deltas.set(from, (deltas.get(from) ?? 0) - 1);
+      if (batchId) deltas.set(batchId, (deltas.get(batchId) ?? 0) + 1);
+      changes.push({ id: snap.id, seq: closing.seq, from });
+      tx.update(refs[i], { batchId: batchId ?? null, batchName: name,
+        updatedAt: serverNow(), updatedBy: scope.uid });
     });
-
-    moved.push({ id: ids[i], seq: closing.seq, from });
+    for (const [id, delta] of deltas) bumpBatch(tx, scope, id, delta);
+    const changedIds = new Set(changes.map((c) => c.id));
+    tx.set(indexRef, {
+      items: (indexSnap.data()?.items ?? []).map((c) => changedIds.has(c.id)
+        ? { ...c, batchId: batchId ?? null } : c),
+      version: Date.now(), updatedAt: serverNow(),
+    }, { merge: true });
+    return changes;
   });
-
-  if (!moved.length) {
-    return { moved: 0, closings: [] };
-  }
-
-  for (const [id, delta] of deltas) {
-    batch.set(
-      db.doc(paths.closingBatch(trustId, programId, id)),
-      { closingCount: inc(delta), updatedAt: serverNow() },
-      { merge: true },
-    );
-  }
-
-  await batch.commit();
-
-  // The index carries `batchId`, and the notice and the receipts are built
-  // from the index — so a closing that moved without this would keep printing
-  // on its old sheet.
-  for (const m of moved) {
-    await patchClosingInIndex(trustId, programId, m.id, { batchId: batchId ?? null });
-  }
-
+  invalidateIndexCache(trustId, programId);
   return { moved: moved.length, closings: moved };
 }
 

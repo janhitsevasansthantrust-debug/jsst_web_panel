@@ -14,7 +14,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import en from '../src/i18n/en.js';
+import enBase from '../src/i18n/en.js';
+import enApps from '../src/i18n/en.apps.js';
+
+const en = { ...enBase, ...enApps };
 import gu from '../src/i18n/gu.js';
 
 const ROOT = process.cwd();

@@ -20,6 +20,7 @@ export const POST = handler(async (request) => {
       email: decoded.email ?? null,
       name: decoded.name ?? '',
       role: decoded.role ?? 'member',
+      roleClaim: decoded.role ?? null,
       trustId: decoded.trustId ?? null,
       programId: decoded.programId ?? null,
     },

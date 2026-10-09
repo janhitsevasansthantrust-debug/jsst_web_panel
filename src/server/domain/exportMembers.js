@@ -1,4 +1,5 @@
 import { statusLabelFor } from '../../config/labels.js';
+import { csvFile } from './csv.js';
 
 /**
  * Turning the member list into a file.
@@ -92,32 +93,16 @@ export function cellValue(member, col) {
 /**
  * CSV, with a UTF-8 BOM.
  *
- * The BOM is not decoration. Excel on Windows reads a CSV as the system code
- * page unless the file starts with one, so without it every Hindi name in this
- * file opens as mojibake — and this list is mostly Hindi names. Three bytes
- * are the difference between a usable file and a support call.
+ * The BOM itself lives in `csv.js` beside the quoting rules, because it is the
+ * same sort of rule: Excel on Windows reads a CSV as the system code page
+ * unless the file starts with one, so without it every Hindi name in this file
+ * opens as mojibake — and this list is mostly Hindi names. Three bytes are the
+ * difference between a usable file and a support call.
  */
 export function toCsv(members) {
-  const lines = [EXPORT_COLUMNS.map((c) => csvCell(c.header)).join(',')];
-
-  for (const m of members) {
-    lines.push(EXPORT_COLUMNS.map((c) => csvCell(cellValue(m, c))).join(','));
-  }
-
-  return `﻿${lines.join('\r\n')}\r\n`;
+  return csvFile(
+    EXPORT_COLUMNS.map((c) => c.header),
+    members.map((m) => EXPORT_COLUMNS.map((c) => cellValue(m, c))),
+  );
 }
 
-/**
- * Quote a CSV field.
- *
- * The leading apostrophe on values starting with `= + - @` is deliberate:
- * without it a spreadsheet treats the cell as a formula. A member whose name
- * or note begins with one of those characters is otherwise a CSV injection
- * waiting to run in whoever opens the file.
- */
-function csvCell(value) {
-  let s = value == null ? '' : String(value);
-  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
-
-  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}

@@ -2,10 +2,16 @@
  * Typed errors — the one shared, framework-free piece of HTTP plumbing.
  *
  * Deliberately separate from `http.js`, which also imports `next/server`.
- * Scripts that run under plain Node (`scripts/create-owner.js`) pull these
- * constructors in through the domain layer and can never resolve `next/server`
- * the way the Next.js bundler can — so nothing a script touches may import it.
- * Error types carry no framework dependency, so they live here.
+ * Scripts that run under plain Node (`scripts/create-owner.js`,
+ * `scripts/verify-closing-lifecycle.js`) pull these constructors in through the
+ * domain layer and can never resolve `next/server` the way the Next.js bundler
+ * can — so nothing a script touches may import it. Error types carry no
+ * framework dependency, so they live here.
+ *
+ * That means the rule is: `src/server/domain/**` imports `./errors.js`, and only
+ * route handlers import `../http.js`. Ten domain files were importing `http.js`
+ * for the same six constructors, which quietly made the whole domain layer
+ * unrunnable outside a Next build.
  */
 
 export class AppError extends Error {

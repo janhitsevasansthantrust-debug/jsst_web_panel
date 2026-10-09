@@ -4,13 +4,14 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Drawer, Tabs, Descriptions, Statistic, Row, Col, Table, Tag, Empty, Spin,
-  Card, Space, Typography, Button, Avatar, Image, Tooltip, App, Alert, Dropdown,
+  Card, Space, Typography, Button, Avatar, Image, Tooltip, App, Alert, Dropdown, Grid,
 } from 'antd';
 import {
   UserOutlined, InfoCircleOutlined, FileImageOutlined, WalletOutlined,
   EditOutlined, StopOutlined, CheckOutlined, DeleteOutlined, TeamOutlined,
-  PrinterOutlined, SafetyCertificateOutlined, FileTextOutlined, DownOutlined,
+  PrinterOutlined, SafetyCertificateOutlined, FileTextOutlined, DownOutlined, MobileOutlined,
 } from '@ant-design/icons';
+import MemberLoginPanel from './MemberLoginPanel.js';
 
 import { api, keys } from '../../lib/api.js';
 import { inr } from '../ui/DataGrid.js';
@@ -32,6 +33,11 @@ const { Text } = Typography;
 export default function MemberDetailsDrawer({ memberId, open, onClose, onEdit }) {
   const { modal, message } = App.useApp();
   const t = useT();
+  // On a phone the drawer is the whole screen and the actions sit under the
+  // title — four buttons in the drawer header pushed the title off a 390px
+  // screen entirely.
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const queryClient = useQueryClient();
   const [related, setRelated] = useState(null);
 
@@ -116,7 +122,7 @@ export default function MemberDetailsDrawer({ memberId, open, onClose, onEdit })
   );
 
   const headerActions = member && (
-    <Space>
+    <Space wrap>
       {/* Every printable sheet this member has, behind one button. Each opens
           in a tab rather than downloading, because the next thing that happens
           is a print dialog — not a trip to the Downloads folder. Four separate
@@ -400,15 +406,20 @@ export default function MemberDetailsDrawer({ memberId, open, onClose, onEdit })
       label: <span><WalletOutlined /> {t('क्लोजिंग और भुगतान')}</span>,
       children: <LedgerTab data={data} />,
     },
+    {
+      key: 'login',
+      label: <span><MobileOutlined /> {t('सदस्य ऐप लॉगिन')}</span>,
+      children: <MemberLoginPanel member={member} />,
+    },
   ];
 
   return (
     <Drawer
       title={title}
-      extra={headerActions}
+      extra={isMobile ? null : headerActions}
       open={open}
       onClose={onClose}
-      width={980}
+      width={isMobile ? '100%' : 980}
       destroyOnHidden
       styles={{ body: { paddingTop: 12 } }}
     >
@@ -425,6 +436,7 @@ export default function MemberDetailsDrawer({ memberId, open, onClose, onEdit })
         />
       )}
 
+      {member && isMobile ? <div style={{ marginBottom: 12, overflowX: 'auto' }}>{headerActions}</div> : null}
       {member && <Tabs defaultActiveKey="basic" items={tabs} />}
     </Drawer>
   );

@@ -226,6 +226,42 @@ body {
   letter-spacing: -0.01em;
 }
 
+/* ── Form fields ─────────────────────────────────────────────────────────────
+   A label that sits ABOVE its input, everywhere, so a row of controls reads as
+   one row of fields rather than as a row of unlabelled boxes. Ant Design's
+   Form.Item already does this — this is for the inline layouts (filter bars,
+   the deposit bar) where a Form would be ceremony around four inputs. */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  cursor: default;
+}
+.field > span {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+/* The running total beside the deposit button — the one number the operator
+   reads twice, once after ticking and once before pressing. */
+.deposit-total {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  height: 100%;
+  min-height: 56px;
+  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--brand-wash);
+  border: 1px solid var(--brand-a12);
+}
+
 /* ── AG Grid ─────────────────────────────────────────────────────────────── */
 
 .grid-wrap {
@@ -266,4 +302,15 @@ body {
     box-shadow: none;
     border: none;
   }
+}
+
+/* ── Phones ──────────────────────────────────────────────────────────────
+   The office panel on a 360–430px screen. The search sits above the
+   member's dues there, so the "choose from the left" placeholder is only
+   noise; and two-column card rows get room to breathe. */
+@media (max-width: 991px) {
+  .collect-empty { display: none; }
+  .ant-drawer .ant-drawer-header { padding: 12px 14px; }
+  .ant-drawer .ant-drawer-body { padding: 14px; }
+  .ant-modal { max-width: calc(100vw - 16px); }
 }

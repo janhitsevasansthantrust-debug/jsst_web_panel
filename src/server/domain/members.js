@@ -18,7 +18,7 @@ import {
 import { postPayment } from './payments.js';
 import { memberKeywords } from '../../lib/memberSearch.js';
 import { joinFeesState } from '../../lib/joinFees.js';
-import { badRequest, conflict, notFound } from '../http.js';
+import { badRequest, conflict, notFound } from '../errors.js';
 import { assertSameProgram } from './scope.js';
 import {
   LIMITS,

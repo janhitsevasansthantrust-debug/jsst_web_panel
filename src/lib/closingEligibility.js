@@ -1,4 +1,6 @@
 import { MEMBER_STATUS, LIMITS } from '../config/constants.js';
+import { isEligible } from '../server/domain/ledger.js';
+import { fromMemberEntry } from '../server/domain/indexEntry.js';
 
 /**
  * Who owes a closing, and how much that comes to.
@@ -52,20 +54,9 @@ export function eligibleForClosing(
      * and their dues go on accruing. (That is the trust's own rule, confirmed
      * rather than assumed.)
      */
-    if (m.status === MEMBER_STATUS.BLOCKED) {
-      // The closing's own rule, so the snapshot bills exactly whom the ledger
-      // will. Two different answers on one screen is worse than either.
-      if (!includeBlocked) continue;
-    } else if (m.status !== MEMBER_STATUS.ACCEPTED) {
-      continue;
-    }
-
-    const joined = Number(m.joinMs);
-    if (!Number.isFinite(joined)) continue;
-    // Joined ON the day: owes. Joined after: does not. The same boundary the
-    // ledger uses, written here too rather than imported, because a snapshot
-    // that disagreed with the ledger would be worse than no snapshot.
-    if (Number.isFinite(date) && joined > date) continue;
+    if (!isEligible(fromMemberEntry(m), {
+      dateMs: date, memberId: exceptMemberId, includeBlocked, status: 'active',
+    })) continue;
 
     const rate = Number(m.pay) > 0 ? Number(m.pay) : LIMITS.DEFAULT_PAY_AMOUNT;
 

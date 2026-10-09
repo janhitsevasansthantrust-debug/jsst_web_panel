@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   App, Button, Card, Col, DatePicker, Empty, Form, Input, Modal, Row, Select,
@@ -12,7 +12,6 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 
-import PhotoUpload from '../members/PhotoUpload.js';
 import { inr } from '../ui/DataGrid.js';
 import { api, keys } from '../../lib/api.js';
 import { useT } from '../../i18n/index.js';
@@ -102,7 +101,12 @@ export default function ClosingBatches() {
                 value: a.id,
               }))}
             />
-            <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setEditing({})}>
+            <Button
+              size="small"
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setEditing({})}
+            >
               {t('नया समूह')}
             </Button>
           </Space>
@@ -111,6 +115,8 @@ export default function ClosingBatches() {
       >
         <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 10 }}>
           {t('एक महीने की सारी क्लोजिंग एक समूह में रखिए और उसकी एक सूचना छापिए। समूह सिर्फ़ छपाई के लिए है — किसी का बकाया इससे नहीं बदलता।')}
+          {' '}
+          {t('निमंत्रण पत्र अलग से नहीं माँगा जाता — वह बंद हुए सदस्य की अपनी क्लोजिंग से ही छपता है।')}
         </Paragraph>
 
         {!query.isLoading && !batches.length ? (
@@ -137,6 +143,22 @@ export default function ClosingBatches() {
                     )}
                   </Space>
                 ),
+              },
+              {
+                title: t('बंद हुआ सदस्य'),
+                dataIndex: 'closedMemberName',
+                width: 170,
+                // Optional: a notice can be a plain bill with no family behind
+                // it, and a blank reads better than an invented "—".
+                render: (v, b) =>
+                  v ? (
+                    <span>
+                      {b.closedMemberRegNo ? <Text type="secondary">{b.closedMemberRegNo} </Text> : null}
+                      {v}
+                    </span>
+                  ) : (
+                    <Text type="secondary">{t('सिर्फ़ सूचना')}</Text>
+                  ),
               },
               {
                 title: t('क्लोजिंग'),
@@ -243,6 +265,7 @@ export function BatchFormModal({ batch, onClose, onCreated }) {
   const [form] = Form.useForm();
   const { message } = App.useApp();
   const queryClient = useQueryClient();
+  const closedMembers = useClosedMemberOptions();
 
   const open = Boolean(batch);
   const editing = Boolean(batch?.id);
@@ -292,7 +315,7 @@ export function BatchFormModal({ batch, onClose, onCreated }) {
           name: batch?.name ?? dayjs().format('MMMM YYYY'),
           description: batch?.description ?? '',
           paymentNote: batch?.paymentNote ?? '',
-          invitationCardURL: batch?.invitationCardURL ?? '',
+          closedMemberId: batch?.closedMemberId ?? null,
           dueDate: batch?.dueDateMs ? dayjs(batch.dueDateMs) : dayjs().endOf('month'),
         }}
       >
@@ -329,6 +352,23 @@ export function BatchFormModal({ batch, onClose, onCreated }) {
         )}
 
         <Form.Item
+          name="closedMemberId"
+          label={t('बंद हुआ सदस्य')}
+          extra={t(
+            'जिस सदस्य के निमंत्रण पत्र से यह सूचना बनी है। उनका पत्र उनकी ही क्लोजिंग से उठकर छपेगा — यहाँ दोबारा अलग से नहीं माँगा जाता।',
+          )}
+        >
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            loading={closedMembers.loading}
+            placeholder={t('कोई नहीं — सिर्फ़ सूचना')}
+            options={closedMembers.options}
+          />
+        </Form.Item>
+
+        <Form.Item
           name="paymentNote"
           label={t('भुगतान की जानकारी')}
           extra={t('कहाँ और कैसे जमा करना है — सूचना के नीचे छपेगा')}
@@ -339,28 +379,44 @@ export function BatchFormModal({ batch, onClose, onCreated }) {
         <Form.Item name="description" label={t('टिप्पणी')}>
           <Input.TextArea rows={2} />
         </Form.Item>
-
-        <Form.Item name="invitationCardURL" label={t('निमंत्रण पत्र')}>
-          <InvitationCard />
-        </Form.Item>
       </Form>
     </Modal>
   );
 }
 
-/** A thin wrapper so `PhotoUpload` can sit inside a `Form.Item`. */
-function InvitationCard({ value, onChange }) {
+/**
+ * The बंद हुआ सदस्य — every member who has a closing, newest first.
+ *
+ * Reverted closings are left out: nobody owes for those, and naming a withdrawn
+ * closing's card on a fresh notice would be asking for money the trust has
+ * already decided not to take.
+ *
+ * Built from the closings list already in the cache, so opening this form costs
+ * no reads of its own.
+ */
+function useClosedMemberOptions() {
   const t = useT();
-  return (
-    <PhotoUpload
-      label={t('निमंत्रण पत्र')}
-      value={value}
-      onChange={onChange}
-      folder="closings"
-      width={160}
-      height={110}
-    />
-  );
+  const closings = useQuery({
+    queryKey: keys.closings,
+    queryFn: () => api.closings.list({ includeReverted: true }),
+  });
+
+  return useMemo(() => {
+    const seen = new Map();
+    for (const c of closings.data?.closings ?? []) {
+      if (c.status === 'reverted' || !c.memberId) continue;
+      if (!seen.has(c.memberId)) seen.set(c.memberId, c);
+    }
+    return {
+      loading: closings.isLoading,
+      options: [...seen.values()]
+        .sort((a, b) => (b.dateMs ?? 0) - (a.dateMs ?? 0) || (b.seq ?? 0) - (a.seq ?? 0))
+        .map((c) => ({
+          value: c.memberId,
+          label: `${c.regNo} ${c.name} · ${c.dateMs ? dayjs(c.dateMs).format('DD-MM-YYYY') : t('तारीख़ नहीं')}`,
+        })),
+    };
+  }, [closings.data, closings.isLoading, t]);
 }
 
 /* ══════════════════════════════════════════════════════════════════════════ */

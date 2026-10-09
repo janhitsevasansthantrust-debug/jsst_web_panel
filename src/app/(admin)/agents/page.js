@@ -100,6 +100,14 @@ export default function AgentsPage() {
     onError: (err) => message.error(err.message),
   });
 
+  // Keyed on the language, not on nothing: the first render is the English
+  // hydration pass — `useLocale` falls back to `DEFAULT_LOCALE` until React
+  // has caught up with localStorage — so a memo that never sees the language
+  // would compute these headers in English once and hand a Hindi page an
+  // English grid forever. `t` is a new function on every render, so depending
+  // on it would rebuild the columns on every keystroke; `t.locale` is what
+  // actually changes.
+  const locale = t.locale;
   const columns = useMemo(
     () => [
       { headerName: t('नाम'), field: 'displayName', flex: 1, minWidth: 160, pinned: 'left' },
@@ -290,7 +298,7 @@ export default function AgentsPage() {
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [byAgent, toggleActive.isPending, toggleActive.variables],
+    [byAgent, toggleActive.isPending, toggleActive.variables, locale],
   );
 
   return (
@@ -409,6 +417,12 @@ export default function AgentsPage() {
             <Text type="secondary">{t('पासवर्ड')}</Text> —{' '}
             <Text copyable strong style={{ fontSize: 17, fontFamily: 'ui-monospace, monospace' }}>
               {credentials?.password}
+            </Text>
+          </div>
+          <div>
+            <Text type="secondary">{t('एजेंट ऐप')}</Text> —{' '}
+            <Text copyable strong>
+              {typeof window !== 'undefined' ? `${window.location.origin}/agent/login` : '/agent/login'}
             </Text>
           </div>
         </div>

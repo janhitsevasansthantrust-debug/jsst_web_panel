@@ -95,6 +95,10 @@ Each member document carries:
 
 **Pending list for a member** = all closings whose `closingDate >= member.joinDate`, with `seq > paidUpTo`, minus `paidSeqs`, minus `exemptSeqs`.
 
+**The closing-date boundary, both edges.** A member owes a closing when the closing's date is on or after the day they joined, and strictly *before* the day they stopped being a member — with one exception that is the whole point of the system: a member who is **closed** still owes every other member's closing on and including their own closing date, because that is the contribution that closed them. Two members closing on the same day pay each other. Their own closing is never theirs, and nothing after their closing date is.
+
+The one field that decides this is `exitDateMs`, and `isEligible` is the only place that reads it. A second copy of the rule in a report or a bill is a rule that will drift, so `lib/closingEligibility.js` and `lib/batchBilling.js` import it rather than restating it.
+
 That is a **pure in-memory computation over an array you already have**. Zero extra reads.
 
 In the normal case (member is fully paid up) `paidSeqs` is **empty** and `paidUpTo = 500`. The member document stays a few hundred bytes. Worst case — a member who paid 500 closings in totally random order — `paidSeqs` is 500 integers ≈ 4.5 KB, versus Firestore's 1 MB limit. This design holds to ~100,000 closings.
@@ -461,6 +465,7 @@ Because it is **data, not code**, you change an agent's rate from the Settings s
   baseAmount: 600,                   // what the commission was computed on
   rateMode: "percent", rateValue: 5,
   amount: 30,
+  reversedAmount: 0,                 // taken back because a closing behind it was reverted
   earnedAtMs,
   status: "earned" | "approved" | "paid" | "cancelled",
   payoutId,
@@ -469,6 +474,8 @@ Because it is **data, not code**, you change an agent's rate from the Settings s
 ```
 
 One entry per earning event, written **inside the same transaction as the payment**. Cancel a receipt → its commission entry is cancelled in the same transaction. Commission can never drift from collections.
+
+**Reverting a closing takes commission back with it, and only the share it earned.** A receipt that carried four closings has one entry; reverting one of them must not cancel the commission on the three that were collected properly. `reverseCommission` takes the reversed amount's share of the entry's own base, and the entry keeps `reversedAmount` rather than being rewritten — an agent whose row shrank is owed an explanation, and every figure in a report or a payout is `amount - reversedAmount` (see `netAmount`). An entry already **paid out** is left alone in both flows: the money has left the trust and cannot be un-earned by a bookkeeping change.
 
 ### 6.3 `commission_payouts/{payoutId}` — settlement
 
@@ -675,3 +682,60 @@ The old project is **never modified**. It stays running until you have verified 
 | PDF list / रसीद / download | Server-side @react-pdf, real Devanagari fonts, background jobs for big lists, signed download URLs. |
 | Can't give it to another trust | All branding is data. New trust = one document + a logo. |
 | No commission system | Two configurable streams (join fee + collection), append-only ledger, payouts, statements. |
+
+---
+
+## 13. Next phase — PDF export
+
+> **The plan.** Receipts, member lists, due lists, closing reports and agent
+> statements — all built server-side, with the trust's own logo and header from
+> the database. Large lists are built in a background job, so the browser does
+> not choke on 5,000 rows.
+
+Most of that sentence already holds, and writing it down as though it did not
+would be worse than leaving it out — the templates and their routes exist:
+
+| document | template | route |
+|---|---|---|
+| Receipt (रसीद) | `ReceiptPdf` | `/api/payments/{id}/receipt` |
+| Member list | `MemberListPdf` | `/api/members/export?format=pdf` |
+| Closing register | `ClosingListPdf` | `/api/closings/list-pdf` |
+| Closing certificate | `ClosingCertificatePdf` | `/api/closings/{id}/form-pdf` |
+| Batch notice | `ClosingNoticePdf` | `/api/closing-batches/{id}/notice` |
+| Batch receipts / agent summary | `ClosingBatchReceiptsPdf`, `ClosingBatchSummaryPdf` | `/api/closing-batches/{id}/bills`, `/api/closings/bills` |
+| Member statement | `MemberStatementPdf` | `/api/members/{id}/statement` |
+| Registration form & certificate | `MemberRegFormPdf`, `MemberCertificatePdf` | `/api/members/{id}/document` |
+| Receipt register (लेन-देन) | `ReceiptRegisterPdf` | `/api/payments/report?format=pdf` (and `?format=csv`) |
+
+The last row is the newest, and it is the only document here that is a
+*register* rather than a record of one thing. `/reports` filters the receipts
+five ways (period, agent, method, status, search), reads the whole
+filtered set once, and derives the four totals, the CSV and the printed sheet
+from that one array — so the number on screen, the number in the file and the
+number on the page cannot drift apart. Its dates go into the query on the
+register's existing index; its method, status and search are applied in memory
+with a bounded walk, which is why no new composite indexes were needed.
+
+So the phase is narrower than the sentence, and these three things are what is
+actually owed by it:
+
+1. **The agent statement.** §6.4 promises a filterable earnings statement with a
+   PDF export and phase 5 lists it, but there is no template and no route — an
+   agent's earnings can be read on screen and paid out, not handed over as a
+   document. That is the gap a trust notices first, because a payout without a
+   statement is a number nobody can check.
+2. **A trust-wide due list (बकाया सूची).** The per-batch slips exist; a list of
+   everyone who still owes, with the trust's header on it, does not.
+3. **`pdf_jobs`, exactly as drawn in §7.4.** Everything in the table above
+   renders inside the request. That is right for one receipt and wrong for five
+   thousand members — which is the only reason §7.4 was written, and it is still
+   the part with no code behind it.
+
+Two rules carry over into this work unchanged. A PDF renders what the server
+already knows — it reads `ledger` and the same queries the screens use, and
+never recomputes an obligation of its own, because a template with its own date
+rule is how the notice and the receipt start disagreeing (§2). And branding is
+data (§7.1): no template may name a trust, an address or a colour that is not
+read from the trust document, or cloning for a second trust breaks the moment
+it is attempted.
+

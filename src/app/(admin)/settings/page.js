@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Card, Menu, Row, Col, Typography, Grid, Tag, Space, Avatar } from 'antd';
 import {
   BankOutlined, TeamOutlined, AppstoreOutlined, SafetyOutlined,
-  CustomerServiceOutlined,
+  CustomerServiceOutlined, MobileOutlined,
 } from '@ant-design/icons';
 
 import PageHeader from '../../../components/ui/PageHeader.js';
@@ -14,6 +14,7 @@ import TeamTab from '../../../components/settings/TeamTab.js';
 import SecurityTab from '../../../components/settings/SecurityTab.js';
 import GroupsTab from '../../../components/settings/GroupsTab.js';
 import SupportTab from '../../../components/settings/SupportTab.js';
+import MobileAppTab from '../../../components/settings/MobileAppTab.js';
 import { api, keys } from '../../../lib/api.js';
 import { useT } from '../../../i18n/index.js';
 
@@ -37,6 +38,12 @@ const SECTIONS = [
     icon: <AppstoreOutlined />,
     label: 'यूनिट / समूह',
     hint: 'सदस्यों की दरें तय करने वाले समूह',
+  },
+  {
+    key: 'mobile',
+    icon: <MobileOutlined />,
+    label: 'मोबाइल ऐप',
+    hint: 'रखरखाव स्क्रीन, ऐप अपडेट, संपर्क नंबर',
   },
   {
     key: 'security',
@@ -126,6 +133,7 @@ export default function SettingsPage() {
             {section === 'organization' && <OrganizationTab />}
             {section === 'team' && <TeamTab />}
             {section === 'groups' && <GroupsTab />}
+            {section === 'mobile' && <MobileAppTab />}
             {section === 'security' && <SecurityTab />}
             {section === 'support' && <SupportTab />}
           </Card>

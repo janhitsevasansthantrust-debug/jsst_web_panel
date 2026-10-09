@@ -3,6 +3,7 @@
 import { useSyncExternalStore } from 'react';
 
 import en from './en.js';
+import enApps from './en.apps.js';
 import gu from './gu.js';
 
 /**
@@ -35,7 +36,7 @@ export const LOCALES = [
 export const DEFAULT_LOCALE = 'en';
 
 /** `hi` has no table: the source text is already Hindi. */
-const TABLES = { en, gu, hi: null };
+const TABLES = { en: { ...en, ...enApps }, gu, hi: null };
 
 const KEY = 'trust.locale';
 

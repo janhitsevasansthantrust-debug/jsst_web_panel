@@ -41,6 +41,9 @@ export function ReceiptPdf({ trust, receipt, member, copies = ['सदस्य 
               <Text style={s.copyLabel}>{label}</Text>
             </View>
 
+            {receipt.status === 'cancelled' ? <Text>रद्द रसीद — {receipt.cancelReason}</Text> : null}
+            {receipt.reversedSeqs?.length ? <Text>वापस की गई क्लोजिंग: {receipt.reversedSeqs.join(', ')} · राशि {inr(receipt.reversedAmount)}</Text> : null}
+
             {/* ── receipt number and date ─────────────────────────────── */}
             <View style={s.metaRow}>
               <View style={s.metaBox}>
@@ -90,25 +93,18 @@ export function ReceiptPdf({ trust, receipt, member, copies = ['सदस्य 
                 <Text style={[s.th, s.colAmt]}>राशि</Text>
               </View>
 
-              {(receipt.items ?? []).slice(0, 14).map((item, n) => (
+              {(receipt.items ?? []).map((item, n) => (
                 <View key={item.seq ?? n} style={[s.tr, n % 2 ? s.trAlt : null]}>
                   <Text style={[s.td, s.colSeq]}>{item.seq}</Text>
                   <Text style={[s.td, s.colName]}>
                     {item.name || '—'}
                     {item.regNo ? ` (${item.regNo})` : ''}
                   </Text>
-                  <Text style={[s.td, s.colDate]}>{hiDate(item.dateMs)}</Text>
+                  <Text style={[s.td, s.colDate]}>{hiDate(item.closingDateMs ?? item.dateMs)}</Text>
                   <Text style={[s.td, s.colAmt]}>{inr(item.amount)}</Text>
                 </View>
               ))}
 
-              {(receipt.items ?? []).length > 14 && (
-                <View style={s.tr}>
-                  <Text style={[s.td, s.colName, { flex: 1 }]}>
-                    …और {(receipt.items ?? []).length - 14} क्लोजिंग
-                  </Text>
-                </View>
-              )}
             </View>
 
             {/* ── totals ──────────────────────────────────────────────── */}
@@ -192,7 +188,7 @@ function sheet(primary) {
       borderColor: '#ddd',
       borderRadius: 4,
       padding: 12,
-      height: '48%',
+      minHeight: '48%',
     },
     // A dashed rule between the two halves: it is a tear line, and it should
     // look like one.

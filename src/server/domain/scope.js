@@ -1,4 +1,4 @@
-import { notFound } from '../http.js';
+import { notFound } from '../errors.js';
 
 /**
  * Refuse to act on a member who belongs to a different योजना.

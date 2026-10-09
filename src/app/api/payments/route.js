@@ -1,51 +1,38 @@
-import { handler, ok, readBody } from '../../../server/http.js';
+import { handler, ok, readBody, readQuery, forbidden } from '../../../server/http.js';
 import { requireScope } from '../../../server/auth/session.js';
 import { postPayment } from '../../../server/domain/payments.js';
-import { db } from '../../../server/firebase/admin.js';
-import { paymentCreate } from '../../../config/schemas.js';
-import { paths, ROLE, LIMITS } from '../../../config/constants.js';
+import { listPaymentsPage } from '../../../server/domain/paymentQuery.js';
+import { paymentCreate, paymentQuery } from '../../../config/schemas.js';
+import { ROLE, LIMITS } from '../../../config/constants.js';
 
 /**
  * GET /api/payments — the receipt register (लेन-देन).
  *
  * Paginated over receipts, which is a few thousand documents at most, not the
  * millions of obligation rows the old system kept.
+ *
+ * The reading itself lives in `server/domain/paymentQuery.js` because the
+ * report on the same screen reads the identical set through the identical
+ * predicate — see that file for why the date range goes into Firestore while
+ * the method, the status and the search do not.
  */
 export const GET = handler(async (request) => {
   const scope = await requireScope(request, ROLE.AGENT);
-  const url = new URL(request.url);
-  const limit = Math.min(
-    Number(url.searchParams.get('limit')) || LIMITS.PAGE_SIZE,
-    LIMITS.MAX_PAGE_SIZE,
+  if (scope.role === ROLE.AGENT && !scope.agentId) throw forbidden();
+
+  const parsed = readQuery(request, paymentQuery);
+
+  const { payments, nextCursor } = await listPaymentsPage(
+    scope,
+    {
+      ...parsed,
+      // An agent sees only what they collected.
+      agentId: scope.role === ROLE.AGENT ? scope.agentId : parsed.agentId,
+    },
+    parsed.limit ?? LIMITS.PAGE_SIZE,
   );
 
-  let query = db
-    .collection(paths.payments(scope.trustId, scope.programId))
-    .where('delete_flag', '==', false);
-
-  const memberId = url.searchParams.get('memberId');
-  if (memberId) query = query.where('memberId', '==', memberId);
-
-  // An agent sees only what they collected.
-  const agentId =
-    scope.role === ROLE.AGENT
-      ? scope.agentId
-      : url.searchParams.get('agentId');
-  if (agentId) query = query.where('collectedByAgentId', '==', agentId);
-
-  query = query.orderBy('paidAtMs', 'desc');
-
-  const cursor = url.searchParams.get('cursor');
-  if (cursor) query = query.startAfter(Number(cursor));
-
-  const snap = await query.limit(limit).get();
-  const payments = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  const last = payments[payments.length - 1];
-
-  return ok({
-    payments,
-    nextCursor: snap.size === limit && last ? last.paidAtMs : null,
-  });
+  return ok({ payments, nextCursor });
 });
 
 /**

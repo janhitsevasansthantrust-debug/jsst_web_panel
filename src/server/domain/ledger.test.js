@@ -15,6 +15,7 @@ import {
   compactLedger,
   applyPayment,
   reversePayment,
+  reverseReceiptItems,
   applyExemption,
   rebuildLedger,
   readLedger,
@@ -74,11 +75,24 @@ test('not eligible once exited on or before the closing date', () => {
   assert.equal(isEligible(m, closings[3]), false); // seq 4, later
 });
 
+test('closed members owe other closings on their closing date inclusively', () => {
+  const m = member({ status: 'closed', closingDateMs: D(12), exitDateMs: D(12) });
+  assert.equal(isEligible(m, closings[2]), true);
+  assert.equal(isEligible(m, closings[3]), false);
+  assert.equal(isEligible({ ...m, id: 'owner3' }, closings[2]), false);
+});
+
 test('reverted closings are never owed', () => {
   assert.equal(
     isEligible(member(), { ...closings[0], status: 'reverted' }),
     false,
   );
+});
+
+test('a closing in the middle of reversal cannot be paid', () => {
+  const reverting = { ...closings[0], status: 'reverting' };
+  assert.equal(isEligible(member(), reverting), false);
+  assert.equal(applyPayment(member(), [1], [reverting]).accepted.length, 0);
 });
 
 test('a missing join date owes nothing (fail closed, never invent debt)', () => {
@@ -274,6 +288,50 @@ test('reversing something that was never paid is a no-op on the money', () => {
   const rev = reversePayment(member({ paidUpTo: 3 }), [9], closings);
   assert.equal(rev.counters.paidAmountDelta, 0);
   assert.equal(rev.reversed[0].was, 'not_paid');
+});
+
+test('cancelling the first instalment keeps the second instalment paid', () => {
+  const first = applyPayment(member(), [1], closings, { amounts: { 1: 100 } });
+  const second = applyPayment({ ...member(), ...first.ledger }, [1], closings);
+  const reversed = reverseReceiptItems(
+    { ...member(), ...second.ledger }, first.accepted, closings,
+  );
+  assert.equal(reversed.ledger.paidUpTo, 0);
+  assert.equal(reversed.ledger.partialPaid[1], 100);
+  assert.equal(reversed.counters.paidCountDelta, -1);
+  assert.equal(reversed.counters.paidAmountDelta, -100);
+  assert.equal(reversed.counters.dueAmount, 1900);
+});
+
+test('cancelling the final instalment also leaves the first paid', () => {
+  const first = applyPayment(member(), [1], closings, { amounts: { 1: 50 } });
+  const second = applyPayment({ ...member(), ...first.ledger }, [1], closings);
+  const reversed = reverseReceiptItems(
+    { ...member(), ...second.ledger }, second.accepted, closings,
+  );
+  assert.equal(reversed.ledger.partialPaid[1], 50);
+  assert.equal(reversed.counters.paidAmountDelta, -150);
+  assert.equal(reversed.counters.dueAmount, 1950);
+});
+
+test('reversing one partial receipt does not clear another partial receipt', () => {
+  const first = applyPayment(member(), [1], closings, { amounts: { 1: 50 } });
+  const second = applyPayment({ ...member(), ...first.ledger }, [1], closings, { amounts: { 1: 60 } });
+  const reversed = reverseReceiptItems(
+    { ...member(), ...second.ledger }, first.accepted, closings,
+  );
+  assert.equal(reversed.ledger.partialPaid[1], 60);
+  assert.equal(reversed.counters.paidCountDelta, 0);
+  assert.equal(reversed.counters.dueAmount, 1940);
+});
+
+test('reversing an instalment retains settlement on other sequences', () => {
+  const first = applyPayment(member(), [1, 2, 3], closings);
+  const reversed = reverseReceiptItems(
+    { ...member(), ...first.ledger }, [first.accepted[1]], closings,
+  );
+  assert.deepEqual(computeDue({ ...member(), ...reversed.ledger }, closings).dueSeqs,
+    [2, 4, 5, 6, 7, 8, 9, 10]);
 });
 
 /* ── exemption ────────────────────────────────────────────────────────────── */

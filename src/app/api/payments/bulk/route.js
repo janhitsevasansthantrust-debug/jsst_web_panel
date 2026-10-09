@@ -18,8 +18,10 @@ import { ROLE } from '../../../../config/constants.js';
  * an agent can see is already filtered to their own.
  */
 export const POST = handler(async (request) => {
-  const scope = await requireScope(request, ROLE.OPERATOR);
+  const scope = await requireScope(request, ROLE.AGENT);
   const input = await readBody(request, bulkCollectInput);
+  input.idempotencyKey ??= request.headers.get('Idempotency-Key') ?? undefined;
+  if (scope.role === ROLE.AGENT) input.collectedByAgentId = scope.agentId;
 
   return ok(await bulkCollect(scope, input));
 });

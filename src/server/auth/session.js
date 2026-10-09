@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 
 import { adminAuth, db } from '../firebase/admin.js';
 import { forbidden, unauthorized } from '../http.js';
@@ -56,7 +56,7 @@ export async function createSession(idToken) {
 
 export async function destroySession() {
   const store = await cookies();
-  const existing = store.get(SESSION_COOKIE)?.value;
+  const existing = store.get(SESSION_COOKIE)?.value ?? (await bearerToken());
 
   if (existing) {
     try {
@@ -97,9 +97,114 @@ export async function destroySession() {
 // app down, and believing it blindly is exactly what did.
 export { pinnedTrustId } from '../domain/trustId.js';
 
+/**
+ * The phone app (trust-app, Expo) cannot rely on an httpOnly cookie, so it
+ * sends the very same Firebase session cookie as `Authorization: Bearer …`.
+ * It is verified exactly like the cookie — revocation included — so a token
+ * is worth no more than a cookie, and signing out or disabling the user ends
+ * it the same way.
+ */
+async function bearerToken() {
+  try {
+    const h = await headers();
+    const auth = h.get('authorization') ?? '';
+    return auth.startsWith('Bearer ') ? auth.slice(7).trim() || null : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sign in from the phone app: email + password straight to Firebase Auth's
+ * REST endpoint, then a session cookie minted from the fresh ID token and
+ * handed back as a bearer token. The app never holds a password or a
+ * long-lived Firebase refresh token, and needs no Firebase SDK at all.
+ */
+export const MOBILE_SESSION_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000; // Firebase maximum
+
+export async function createMobileSession(email, password) {
+  const key = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
+  if (!key) throw new Error('NEXT_PUBLIC_FIREBASE_API_KEY is not set');
+
+  const res = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(key)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, returnSecureToken: true }),
+    },
+  );
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.idToken) {
+    const code = String(body?.error?.message ?? '');
+    if (code.includes('TOO_MANY_ATTEMPTS')) throw unauthorized('बहुत बार कोशिश की गई — कुछ देर बाद प्रयास करें');
+    if (code.includes('USER_DISABLED')) throw unauthorized('यह लॉगिन बंद है — कार्यालय से संपर्क करें');
+    throw unauthorized('लॉगिन ID या पासवर्ड गलत है');
+  }
+
+  const decoded = await adminAuth.verifyIdToken(body.idToken, true);
+  const token = await adminAuth.createSessionCookie(body.idToken, {
+    expiresIn: MOBILE_SESSION_MAX_AGE_MS,
+  });
+  return { token, decoded, expiresAtMs: Date.now() + MOBILE_SESSION_MAX_AGE_MS };
+}
+
+/**
+ * A fresh 14-day phone token for someone already signed in — without their
+ * password. Used to keep the app signed in for as long as it is used (the app
+ * renews a few days before expiry) and after a password change (which revokes
+ * the old token).
+ *
+ * Custom token → ID token (Firebase Auth REST) → session cookie: the same
+ * kind of token a password sign-in produces, revocable the same way.
+ */
+export async function reissueMobileSession(uid) {
+  const key = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
+  if (!key) throw new Error('NEXT_PUBLIC_FIREBASE_API_KEY is not set');
+
+  const custom = await adminAuth.createCustomToken(uid);
+  const res = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${encodeURIComponent(key)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: custom, returnSecureToken: true }),
+    },
+  );
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.idToken) throw unauthorized('सत्र नवीनीकरण नहीं हुआ — दोबारा लॉगिन करें');
+
+  const token = await adminAuth.createSessionCookie(body.idToken, { expiresIn: MOBILE_SESSION_MAX_AGE_MS });
+  return { token, expiresAtMs: Date.now() + MOBILE_SESSION_MAX_AGE_MS };
+}
+
+/**
+ * Check a password for an email without creating a session — the "current
+ * password" step of a password change.
+ */
+export async function verifyPassword(email, password) {
+  const key = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
+  if (!key) throw new Error('NEXT_PUBLIC_FIREBASE_API_KEY is not set');
+  const res = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(key)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, returnSecureToken: false }),
+    },
+  );
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const code = String(body?.error?.message ?? '');
+    if (code.includes('TOO_MANY_ATTEMPTS')) throw unauthorized('बहुत बार कोशिश की गई — कुछ देर बाद प्रयास करें');
+    return false;
+  }
+  return true;
+}
+
 export async function getSession() {
   const store = await cookies();
-  const cookie = store.get(SESSION_COOKIE)?.value;
+  const cookie = store.get(SESSION_COOKIE)?.value ?? (await bearerToken());
   if (!cookie) return null;
 
   let decoded;
@@ -116,6 +221,13 @@ export async function getSession() {
     email: claims.email ?? null,
     name: claims.name ?? claims.displayName ?? '',
     role: claims.role ?? ROLE.MEMBER,
+    /**
+     * The role exactly as the account carries it, or null. `role` defaults to
+     * member for an account with no claims at all — which is both a login
+     * carried over from the old app AND a brand-new owner before setup — so
+     * anything that must tell those apart reads this instead.
+     */
+    roleClaim: claims.role ?? null,
     trustId: claims.trustId ?? null,
     programId: claims.programId ?? null,
     agentId: claims.agentId ?? null,

@@ -7,6 +7,7 @@ import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage
 import ImgCrop from 'antd-img-crop';
 
 import { storage } from '../../lib/firebase/client.js';
+import { api } from '../../lib/api.js';
 import { useT } from '../../i18n/index.js';
 
 const { Text } = Typography;
@@ -57,7 +58,10 @@ export default function PhotoUpload({
   const [busy, setBusy] = useState(false);
 
   async function handleUpload({ file }) {
-    if (!upload && !storage) {
+    // Member photos and documents go through the server (checked against the
+    // session, not Storage rules). Other folders keep the direct upload.
+    const viaServer = !upload && (folder === 'members' || folder === 'documents');
+    if (!upload && !viaServer && !storage) {
       message.error(t('Firebase Storage उपलब्ध नहीं — .env.local जाँचें'));
       return;
     }
@@ -69,6 +73,9 @@ export default function PhotoUpload({
       let url;
       if (upload) {
         url = await upload(prepared);
+      } else if (viaServer) {
+        const named = prepared instanceof File ? prepared : new File([prepared], 'photo.jpg', { type: prepared.type || 'image/jpeg' });
+        url = await api.uploads.memberDoc(named, folder);
       } else {
         const name = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`;
         const path = `${folder}/${new Date().getFullYear()}/${name}`;

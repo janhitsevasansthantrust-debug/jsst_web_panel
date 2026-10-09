@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   resolvePolicy, computeCommission, commissionForPayment, commissionForJoinFee,
-  slabValue, summariseEntries, round2, DEFAULT_POLICY,
+  slabValue, summariseEntries, round2, DEFAULT_POLICY, reverseCommission, netAmount,
 } from './commission.js';
 import { COMMISSION_TYPE } from '../../config/constants.js';
 
@@ -156,4 +156,64 @@ test('summarising keeps the two streams apart and drops cancelled entries', () =
 test('DEFAULT_POLICY is inert until someone turns it on', () => {
   assert.equal(commissionForPayment(DEFAULT_POLICY, { collectedAmount: 1000, closingCount: 1 }), null);
   assert.equal(commissionForJoinFee(DEFAULT_POLICY, { joinFeeAmount: 500 }), null);
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Reverting a closing takes the commission back with it
+   ══════════════════════════════════════════════════════════════════════════ */
+
+const entry = (over = {}) => ({
+  amount: 100, baseAmount: 1000, units: 4, sourceType: 'payment',
+  status: 'earned', type: COMMISSION_TYPE.COLLECTION, ...over,
+});
+
+test('one reverted closing takes back only its share of the receipt’s entry', () => {
+  // A receipt of ₹1,000 over four closings earns ₹100. Reverting the ₹250
+  // instalment must claw back ₹25, not the whole ₹100 — the other three
+  // closings were collected perfectly well.
+  const take = reverseCommission(entry(), { amount: 250, baseAmount: 1000 });
+  assert.equal(take.amount, 25);
+  assert.equal(take.remaining, 75);
+  assert.equal(take.exhausted, false);
+});
+
+test('the last share reversed cancels the entry instead of leaving a zero row', () => {
+  const first = reverseCommission(entry(), { amount: 250, baseAmount: 1000 });
+  const second = reverseCommission(
+    { ...entry(), reversedAmount: first.amount },
+    { amount: 750, baseAmount: 1000 },
+  );
+  assert.equal(second.amount, 75);
+  assert.equal(second.remaining, 0);
+  assert.equal(second.exhausted, true);
+});
+
+test('a joining-fee entry is untouched by a closing reversal', () => {
+  // The joining fee is not part of any closing. A receipt can carry both
+  // entries, and cancelling the closings half must not touch the other.
+  const take = reverseCommission(
+    entry({ sourceType: 'joinFee', type: COMMISSION_TYPE.JOIN_FEE, amount: 20, baseAmount: 500 }),
+    { amount: 250, baseAmount: 1000 },
+  );
+  assert.equal(take.amount, 0);
+  assert.equal(take.exhausted, false);
+});
+
+test('nothing is clawed back from an entry with no base to take a share of', () => {
+  // Better to leave the agent whole than to guess and take all of it.
+  assert.equal(reverseCommission(entry({ baseAmount: 0 }), { amount: 250 }).amount, 0);
+  assert.equal(reverseCommission(entry(), { amount: 0 }).amount, 0);
+  assert.equal(reverseCommission(null, { amount: 250 }).amount, 0);
+});
+
+test('summaries and payouts count the net, not the figure originally earned', () => {
+  const summary = summariseEntries([
+    { ...entry(), reversedAmount: 25 },
+    { ...entry({ amount: 40, type: COMMISSION_TYPE.JOIN_FEE }), status: 'paid' },
+  ]);
+  assert.equal(summary.collectionTotal, 75);
+  assert.equal(summary.payableTotal, 75);
+  assert.equal(netAmount({ ...entry(), reversedAmount: 100 }), 0);
+  assert.equal(netAmount({ ...entry(), reversedAmount: 500 }), 0);
+  assert.equal(netAmount(entry()), 100);
 });

@@ -257,7 +257,7 @@ export default function CollectPage() {
         subtitle={t('सदस्य खोजें, क्लोजिंग चुनें, रसीद बनाएँ')}
       />
 
-      <Row gutter={16}>
+      <Row gutter={[16, 16]}>
         <Col xs={24} lg={9}>
           <Card size="small" title={t('सदस्य खोजें')}>
             <Input
@@ -291,6 +291,12 @@ export default function CollectPage() {
                   onClick={() => {
                     setMemberId(m.id);
                     setSelected([]);
+                    // On a phone the member's dues are BELOW the search list,
+                    // so picking someone appeared to do nothing. Bring them up.
+                    if (typeof window !== 'undefined' && window.innerWidth < 992) {
+                      setTimeout(() => document.getElementById('collect-member')
+                        ?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
+                    }
                   }}
                   style={{
                     padding: '8px 10px',
@@ -321,9 +327,9 @@ export default function CollectPage() {
           </Card>
         </Col>
 
-        <Col xs={24} lg={15}>
+        <Col xs={24} lg={15} id="collect-member" style={{ scrollMarginTop: 72 }}>
           {!memberId && (
-            <Card>
+            <Card className="collect-empty">
               <Empty description={t('बाईं ओर से सदस्य चुनें')} />
             </Card>
           )}

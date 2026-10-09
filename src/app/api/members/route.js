@@ -1,6 +1,7 @@
 import { handler, ok, readBody, readQuery, badRequest } from '../../../server/http.js';
 import { db } from '../../../server/firebase/admin.js';
 import { requireScope } from '../../../server/auth/session.js';
+import { ensureMemberLogin } from '../../../server/domain/memberLogin.js';
 import { createMember, listMembers } from '../../../server/domain/members.js';
 import { memberCreate, memberListQuery } from '../../../config/schemas.js';
 import { ROLE, paths } from '../../../config/constants.js';
@@ -56,5 +57,9 @@ export const POST = handler(async (request) => {
       : {}),
   });
 
-  return ok({ member }, { status: 201 });
+  // Every new member gets a member-app login at once:
+  // reg. no. + mobile number. Never blocks the enrolment.
+  const login = await ensureMemberLogin(scope, member);
+
+  return ok({ member, login }, { status: 201 });
 });

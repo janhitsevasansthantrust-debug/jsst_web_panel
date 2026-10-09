@@ -323,6 +323,13 @@ export default function MembersPage() {
 
   /* ── columns ───────────────────────────────────────────────────────────── */
 
+  // Keyed on the language, not on nothing: the first render is the English
+  // hydration pass — `useLocale` falls back to `DEFAULT_LOCALE` until React
+  // has caught up with localStorage — so a memo with `[]` would compute these
+  // headers in English once and hand a Hindi page an English grid forever.
+  // `t` is a new function on every render, so depending on it would rebuild
+  // the columns on every keystroke; `t.locale` is what actually changes.
+  const locale = t.locale;
   const columns = useMemo(
     () => [
       {
@@ -517,7 +524,7 @@ export default function MembersPage() {
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [locale],
   );
 
   /* ── render ────────────────────────────────────────────────────────────── */

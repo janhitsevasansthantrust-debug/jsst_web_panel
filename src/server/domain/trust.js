@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { db, adminAuth, serverNow } from '../firebase/admin.js';
-import { badRequest, conflict, notFound } from '../http.js';
+import { badRequest, conflict, notFound } from '../errors.js';
 import { setUserClaims } from '../auth/session.js';
 import { ROLE, ROLE_RANK, paths } from '../../config/constants.js';
 import { DEFAULT_PRIMARY, DEFAULT_ACCENT } from '../../lib/theme.js';

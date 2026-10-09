@@ -4,6 +4,7 @@ import {
   CLOSING_TYPE,
   MEMBER_STATUS,
   PAYMENT_METHOD,
+  PAYMENT_STATUS,
   COMMISSION_MODE,
   LIMITS,
   ROLE,
@@ -281,6 +282,57 @@ export const memberStatusChange = z.object({
   atMs: dateMs.optional(),
 });
 
+/* ── member requests (agent app → office) ─────────────────────────────── */
+
+/**
+ * What an agent sends from the agent app. The same fields as the member form,
+ * minus everything only the office decides: registration number, status, the
+ * agent (always the sender), and the joining-fee receipt (a claim here, a
+ * receipt only on approval).
+ */
+export const memberRequestCreate = memberCreate
+  .pick({
+    programId: true, displayName: true, fatherName: true, gender: true,
+    jati: true, gotra: true, guardian: true, guardianRelation: true,
+    phone: true, phoneAlt: true, aadhaarNo: true,
+    bobDate: true, bobDateMs: true, joinDate: true, joinDateMs: true,
+    locationGroupId: true, state: true, district: true, village: true,
+    pinCode: true, currentAddress: true,
+    photoURL: true, documentFrontURL: true, documentBackURL: true,
+    extraImageURL: true, guardianDocumentURL: true, extraDetails: true,
+    joinFeesMethod: true,
+  })
+  .extend({
+    phone: z.string().trim().regex(/^[0-9+\-\s]{10,15}$/, 'सही मोबाइल नंबर डालें'),
+    /** Joining fee the agent says they took in hand — confirmed on approval. */
+    joinFeesCollected: money.optional().default(0),
+    joinFeesReference: optionalText(80),
+    note: optionalText(500),
+  });
+
+export const memberRequestReview = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('approve'),
+    registrationNumber: z.string().trim().max(20).optional(),
+    joinDateMs: dateMs.optional(),
+    joinDate: optionalText(20),
+    joinFeesPaidNow: money.optional(),
+    joinFeesMethod: z.enum(Object.values(PAYMENT_METHOD)).optional(),
+    joinFeesReference: optionalText(80),
+    note: optionalText(300),
+  }),
+  z.object({
+    action: z.literal('reject'),
+    reason: trimmed(300).min(2, 'कारण लिखें'),
+  }),
+]);
+
+/** Office sets or resets a member's own app login. */
+export const memberLoginSet = z.object({
+  password: z.string().min(6, 'पासवर्ड कम से कम 6 अक्षर').max(64).optional(),
+  disabled: z.boolean().optional(),
+});
+
 /* ── closings ────────────────────────────────────────────────────────────── */
 
 export const closingCreate = z.object({
@@ -356,6 +408,14 @@ export const closingUpdate = z.object({
  *
  * `code` is accepted on create only. It is printed inside every receipt number
  * issued under the batch, so it is fixed once and never patched.
+ *
+ * There is deliberately no `invitationCardURL` here any more. One card per
+ * closed member is what the trust actually has — a wedding card belongs to a
+ * family, not to a month — and it is already stored on each closing and printed
+ * on that member's समापन पत्र. Holding a second copy on the batch meant the
+ * same card lived in two places and the batch's copy was whichever family's
+ * card somebody uploaded last. Naming the closed member instead keeps one card
+ * per member, in one place, and the notice prints it from there.
  */
 export const closingBatchCreate = z.object({
   name: trimmed(120).min(2, 'समूह का नाम ज़रूरी है'),
@@ -364,7 +424,11 @@ export const closingBatchCreate = z.object({
   dueDate: optionalText(20),
   dueDateMs: dateMs.optional().nullable(),
   paymentNote: optionalText(600),
-  invitationCardURL: z.string().url().optional().or(z.literal('')),
+  /**
+   * Whose closing this batch's notice is about. Stationery, like the rest of
+   * the batch: it decides what the sheet shows and never what anybody owes.
+   */
+  closedMemberId: z.string().optional().nullable(),
 });
 
 /** Which closings to put on a batch's notice, or take off it. */
@@ -386,6 +450,46 @@ export const closingRevert = z.object({
 /* ── payments ────────────────────────────────────────────────────────────── */
 
 /**
+ * The receipt register's filters — read by the list AND by the report.
+ *
+ * One schema for both, on purpose. They are two views of the same question and
+ * a filter parsed twice is a filter that drifts; the screen would then show
+ * one set of rows while the file somebody downloaded showed another, and that
+ * kind of disagreement gets discovered during an argument rather than a review.
+ *
+ * `paidFromMs`/`paidToMs` is the day the money was taken. `fromMs`/`toMs` is
+ * the day the INSTALMENT was for. Two windows, deliberately separate, because
+ * "what came in this week" and "which instalments of that month were settled"
+ * are different questions and one range cannot answer both.
+ */
+export const paymentQuery = z.object({
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(LIMITS.MAX_PAGE_SIZE).optional(),
+
+  memberId: z.string().optional(),
+  agentId: z.string().optional(),
+  closingId: z.string().optional(),
+  batchId: z.string().optional(),
+
+  /** The day the money was taken. */
+  paidFromMs: z.coerce.number().int().optional(),
+  paidToMs: z.coerce.number().int().optional(),
+  /** The day the instalment was for. */
+  fromMs: z.coerce.number().int().optional(),
+  toMs: z.coerce.number().int().optional(),
+
+  method: z.enum(Object.values(PAYMENT_METHOD)).optional(),
+  status: z.enum(Object.values(PAYMENT_STATUS)).optional(),
+  /** Free text over the receipt no., the member, the agent, the note. */
+  q: z.string().max(80).optional(),
+});
+
+/** The same filters, as a file. `format` decides which one. */
+export const paymentReportQuery = paymentQuery.extend({
+  format: z.enum(['json', 'csv', 'pdf']).default('json'),
+});
+
+/**
  * One deposit split across many members.
  *
  * `amount` with a `rule` is the automatic split; `byMember` is the operator's
@@ -394,6 +498,10 @@ export const closingRevert = z.object({
  * ledger disposes.
  */
 export const bulkCollectInput = z.object({
+  batchId: z.string().optional(),
+  closingId: z.string().optional(),
+  fromMs: dateMs.optional(),
+  toMs: dateMs.optional(),
   memberIds: z.array(z.string().min(1)).min(1).max(500),
 
   amount: money.optional(),

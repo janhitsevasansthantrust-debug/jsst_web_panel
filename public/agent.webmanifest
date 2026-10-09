@@ -1,0 +1,16 @@
+{
+  "name": "एजेंट ऐप",
+  "short_name": "एजेंट",
+  "description": "सदस्य, क्लोजिंग वसूली, बकाया सूची और कमीशन — एजेंट के फ़ोन पर",
+  "start_url": "/agent",
+  "scope": "/agent",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f6f6f9",
+  "theme_color": "#7a1f2b",
+  "lang": "hi",
+  "icons": [
+    { "src": "/icons/agent-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icons/agent-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

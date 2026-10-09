@@ -1,19 +1,21 @@
 import 'server-only';
 
 import { db, FieldValue, serverNow, inc, chunk } from '../firebase/admin.js';
-import { applyPayment, reversePayment } from './ledger.js';
+import { applyPayment, reverseReceiptItems } from './ledger.js';
 import { getClosingsIndex, patchMemberInIndex, patchMembersInIndex } from './indexes.js';
 import {
   resolvePolicy, commissionForPayment, commissionForJoinFee, round2,
 } from './commission.js';
-import { badRequest, conflict, notFound } from '../http.js';
+import { badRequest, conflict, forbidden, notFound } from '../errors.js';
 import { joinFeesState, applyJoinFeePayment } from '../../lib/joinFees.js';
 import { allocateDeposit, allocateExplicit } from '../../lib/bulkAllocate.js';
 import { assertSameProgram } from './scope.js';
+import { selectClosings } from '../../lib/closingSelection.js';
 import {
   LIMITS,
   PAYMENT_STATUS,
   COMMISSION_STATUS,
+  ROLE,
   paths,
 } from '../../config/constants.js';
 
@@ -187,23 +189,24 @@ async function postOneReceipt(scope, input, closings, uid, groupCodes = new Map(
   return db.runTransaction(async (tx) => {
     /* ─── ALL READS FIRST (Firestore requires it) ─────────────────────── */
 
-    const [idemSnap, memberSnap, seqSnap] = await Promise.all([
+    const [idemSnap, memberSnap, seqSnap, closingIndexSnap] = await Promise.all([
       idemRef ? tx.get(idemRef) : Promise.resolve(null),
       tx.get(memberRef),
       tx.get(seqRef),
+      tx.get(db.doc(paths.closingsIndex(trustId, programId))),
     ]);
-
-    // Replay of a request we already processed → hand back the original.
-    if (idemSnap?.exists) {
-      return {
-        receipt: idemSnap.data().receipt,
-        rejected: idemSnap.data().rejected ?? [],
-        replayed: true,
-      };
-    }
+    const closings = closingIndexSnap.data()?.items ?? [];
 
     if (!memberSnap.exists) throw notFound('Member not found');
     const member = { id: memberSnap.id, ...memberSnap.data() };
+    assertSameProgram(member, programId);
+    if (scope.role === ROLE.AGENT && member.agentId !== scope.agentId) {
+      throw forbidden('This member is not assigned to you');
+    }
+    if (idemSnap?.exists) {
+      if (idemSnap.data().receipt.memberId !== input.memberId) throw conflict('Payment key belongs to another member');
+      return { receipt: idemSnap.data().receipt, rejected: idemSnap.data().rejected ?? [], replayed: true };
+    }
 
     const agentId = input.collectedByAgentId ?? member.agentId ?? null;
     const agentRef = agentId ? db.doc(paths.agent(trustId, agentId)) : null;
@@ -219,6 +222,18 @@ async function postOneReceipt(scope, input, closings, uid, groupCodes = new Map(
     const applied = applyPayment(member, input.seqs, closings, {
       amounts: input.amounts,
     });
+
+    // The shared index can be stale while a closing is being reverted. Read
+    // each accepted closing in this transaction so a concurrent revert cannot
+    // leave a completed receipt outside its payer query.
+    if (applied.accepted.length) {
+      const live = await tx.getAll(...applied.accepted.map((item) =>
+        db.doc(paths.closing(trustId, programId, item.closingId)),
+      ));
+      if (live.some((snap) => !snap.exists || snap.data().status !== 'active')) {
+        throw conflict('A selected closing is no longer active — refresh and try again');
+      }
+    }
 
     const joinFee = round2(Number(input.joinFeeAmount) || 0);
     if (!applied.accepted.length && joinFee <= 0) {
@@ -396,7 +411,10 @@ async function postOneReceipt(scope, input, closings, uid, groupCodes = new Map(
       referenceVerified: false,
       note: input.note ?? '',
 
-      items: applied.accepted,
+      items: applied.accepted.map((item) => ({
+        ...item,
+        batchId: closings.find((c) => c.seq === item.seq)?.batchId ?? null,
+      })),
       seqs: applied.accepted.map((a) => a.seq),
       itemCount: applied.accepted.length,
 
@@ -548,6 +566,9 @@ export async function cancelPayment(scope, receiptId, { reason, uid }) {
     if (receipt.status === PAYMENT_STATUS.CANCELLED) {
       throw conflict('This receipt is already cancelled');
     }
+    if (receipt.reversedSeqs?.length) {
+      throw conflict('This receipt includes a reverted closing; reconcile the remaining lines before cancelling it');
+    }
 
     const memberRef = db.doc(paths.member(trustId, receipt.memberId));
     // A receipt can carry two commission entries — closings and joining fee.
@@ -574,8 +595,8 @@ export async function cancelPayment(scope, receiptId, { reason, uid }) {
     if (!memberSnap.exists) throw notFound('Member not found');
     const member = { id: memberSnap.id, ...memberSnap.data() };
 
-    const seqs = receipt.seqs ?? receipt.items?.map((i) => i.seq) ?? [];
-    const reversed = reversePayment(member, seqs, closings);
+    assertSameProgram(member, programId);
+    const reversed = reverseReceiptItems(member, receipt.items ?? [], closings);
 
     const closingAmount = Number(receipt.closingAmount) || 0;
     const joinFee = Number(receipt.joinFeeAmount) || 0;
@@ -617,7 +638,7 @@ export async function cancelPayment(scope, receiptId, { reason, uid }) {
 
     for (const item of receipt.items ?? []) {
       tx.update(db.doc(paths.closing(trustId, programId, item.closingId)), {
-        paidCount: inc(item.full ? -1 : 0),
+        paidCount: inc(reversed.lines?.find((line) => line.seq === item.seq)?.paidCountDelta ?? 0),
         paidAmount: inc(-(Number(item.amount) || 0)),
         updatedAt: serverNow(),
       });
@@ -682,8 +703,8 @@ export async function cancelPayment(scope, receiptId, { reason, uid }) {
       receiptId,
       receiptNo: receipt.receiptNo,
       memberId: receipt.memberId,
-      reversedSeqs: reversed.reversed.map((r) => r.seq),
-      refundAmount: Math.abs(reversed.counters.paidAmountDelta),
+      reversedSeqs: (receipt.items ?? []).map((r) => r.seq),
+      refundAmount: Math.abs(reversed.counters.paidAmountDelta) + joinFee,
     };
   });
 
@@ -735,6 +756,13 @@ export async function cancelPayment(scope, receiptId, { reason, uid }) {
  */
 export async function bulkCollect(scope, input) {
   const { trustId, programId } = scope;
+  if (scope.role === ROLE.AGENT && !scope.agentId) throw forbidden();
+  if (input.idempotencyKey?.includes('/')) throw badRequest('Invalid payment key');
+  const depositRef = !input.preview && input.idempotencyKey
+    ? db.doc(`${paths.idempotency(trustId, programId)}/deposit:${scope.uid}:${input.idempotencyKey}`)
+    : null;
+  const previous = depositRef ? await depositRef.get() : null;
+  if (previous?.data()?.result) return previous.data().result;
 
   const memberIds = [...new Set(input.memberIds ?? [])];
   if (!memberIds.length) throw badRequest('कम से कम एक सदस्य चुनें');
@@ -752,6 +780,8 @@ export async function bulkCollect(scope, input) {
   ]);
 
   const { computeDue } = await import('./ledger.js');
+
+  const selectedClosings = selectClosings(closings, input);
 
   const rows = [];
   const missing = [];
@@ -771,7 +801,10 @@ export async function bulkCollect(scope, input) {
       continue;
     }
 
-    const due = computeDue(member, closings);
+    if (scope.role === ROLE.AGENT && member.agentId !== scope.agentId) {
+      throw forbidden('This member is not assigned to you');
+    }
+    const due = computeDue(member, selectedClosings);
     const fees = joinFeesState(member);
 
     rows.push({
@@ -812,7 +845,7 @@ export async function bulkCollect(scope, input) {
 
   const include = input.include ?? 'both';
 
-  const plan = input.byMember
+  let plan = input.byMember
     ? allocateExplicit(rows, input.byMember, { include })
     : allocateDeposit(rows, Number(input.amount) || 0, { rule: input.rule, include });
 
@@ -823,6 +856,17 @@ export async function bulkCollect(scope, input) {
       rows: rows.map(({ due, ...rest }) => rest),
       missing,
     };
+  }
+
+  // Freeze the allocation before the first member is paid. A network retry
+  // must not redistribute the same deposit over the now-smaller dues.
+  if (depositRef) {
+    plan = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(depositRef);
+      if (snap.exists) return snap.data().plan;
+      tx.set(depositRef, { plan, createdBy: scope.uid, createdAt: serverNow() });
+      return plan;
+    });
   }
 
   if (!plan.lines.length) {
@@ -837,7 +881,7 @@ export async function bulkCollect(scope, input) {
 
   /* ─── post, one member at a time ──────────────────────────────────────── */
 
-  const batchRef = input.idempotencyKey || newId();
+  const batchRef = `${scope.uid}:${input.idempotencyKey || newId()}`;
   const receipts = [];
   const failed = [];
 
@@ -916,7 +960,7 @@ export async function bulkCollect(scope, input) {
 
   const collected = round2(receipts.reduce((s, r) => s + (Number(r.totalAmount) || 0), 0));
 
-  return {
+  const result = {
     batchRef,
     receipts,
     receiptCount: receipts.length,
@@ -933,6 +977,8 @@ export async function bulkCollect(scope, input) {
     failed,
     missing,
   };
+  if (depositRef) await depositRef.set({ result }, { merge: true });
+  return result;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -957,6 +1003,9 @@ export async function getMemberLedger(scope, memberId, { receiptLimit = 20 } = {
   if (!memberSnap.exists) throw notFound('Member not found');
   const member = { id: memberSnap.id, ...memberSnap.data() };
   assertSameProgram(member, programId);
+  if (scope.role === ROLE.AGENT && member.agentId !== scope.agentId) {
+    throw forbidden('This member is not assigned to you');
+  }
 
   const { computeDue } = await import('./ledger.js');
   const due = computeDue(member, closings);

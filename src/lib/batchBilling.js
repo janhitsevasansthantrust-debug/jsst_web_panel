@@ -1,4 +1,6 @@
 import { MEMBER_STATUS, LIMITS, CLOSING_STATUS } from '../config/constants.js';
+import { computeDue } from '../server/domain/ledger.js';
+import { fromMemberEntry } from '../server/domain/indexEntry.js';
 
 /**
  * Who is billed for a क्लोजिंग समूह, and for which of its closings.
@@ -30,23 +32,11 @@ export function billBatch(items, closings, { programId, agentId } = {}) {
     if (programId && m.pid !== programId) continue;
     if (agentId && m.agentId !== agentId) continue;
 
-    if (m.status !== MEMBER_STATUS.ACCEPTED && m.status !== MEMBER_STATUS.BLOCKED) continue;
-
-    const joined = Number(m.joinMs);
-    if (!Number.isFinite(joined)) continue;
-
-    const owed = live.filter((c) => {
-      // Each closing carries its own rule about blocked members, so a receipt
-      // lists exactly what the ledger says that member owes — closing by
-      // closing, not member by member.
-      if (c.includeBlocked === false && m.status === MEMBER_STATUS.BLOCKED) return false;
-      // A member never owes their own closing — and they are the reason the
-      // rest of the trust is being billed.
-      if (c.memberId && c.memberId === m.id) return false;
-      const date = Number(c.dateMs);
-      if (!Number.isFinite(date)) return false;
-      return joined <= date;
-    });
+    const due = computeDue(fromMemberEntry(m), live);
+    const owed = due.dueItems.map((item) => ({
+      ...live.find((c) => c.seq === item.seq),
+      remaining: item.remaining, alreadyPaid: item.alreadyPaid,
+    }));
 
     if (!owed.length) continue;
 
@@ -70,7 +60,7 @@ export function billBatch(items, closings, { programId, agentId } = {}) {
       rate,
       closings: owed,
       count: owed.length,
-      total: rate * owed.length,
+      total: due.dueAmount,
     });
   }
 

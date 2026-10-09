@@ -34,7 +34,9 @@ rule is most of why the new system is ~1000× cheaper than the old one.
 Never create a document per (member × closing). If you find yourself writing a
 loop over members to record what they owe, stop — that is the 2.5-million-row
 mistake the rewrite exists to undo. Eligibility comes from
-`ledger.isEligible()` and nothing else.
+`ledger.isEligible()` and nothing else — and every screen that *bills* someone
+imports it. Restating the date rule in a report is how the notice and the
+receipt end up disagreeing about the same instalment.
 
 **3. Money moves only inside a transaction.**
 Never `batch.update()` a payment. Receipt + member ledger + closing counters +
@@ -42,9 +44,18 @@ program stats + commission entry are written together or not at all. The server
 re-reads the member inside the transaction and decides for itself what is due —
 the browser's list of seqs is a *request*, never the decision.
 
+**3a. The closings index is written in the same transaction as the closing.**
+A closing document and the index every bill is built from must never disagree,
+so there is no "patch the index afterwards" helper any more. If you are changing
+a closing, you are changing its index entry in that same transaction.
+
 **4. Nothing that records money is ever deleted.**
 Cancel, revert, reverse — always with a reason, an author and an audit log
-entry. A closing that is reverted keeps its document and retires its seq.
+entry. A closing that is reverted keeps its document and retires its seq. What
+goes back, it goes back everywhere at once: the member's ledger, the closing's
+counters, the trust's stats, the receipt's line, the agent's commission share and
+the search index. A reversal that misses one of those is worse than no reversal,
+because the screen now confidently shows the wrong number.
 
 **5. `ledger.js` and `commission.js` stay pure.**
 No Firestore, no `Date.now()`, no I/O. They are the only two files where a bug
@@ -88,4 +99,7 @@ npm run dev            # dev server
 npm test               # ledger + commission unit tests — run before every commit
 npm run migrate:verify # reconciliation report against the old Firebase project
 npm run reindex        # rebuild the closings + members index documents
+npm run repair:closings # reconcile old ledgers against their receipts
+npm run emulator       # Firestore emulator on :8080
+npm run verify:closings # the whole closing lifecycle, end to end, on the emulator
 ```

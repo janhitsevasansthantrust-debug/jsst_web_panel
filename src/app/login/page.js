@@ -12,6 +12,7 @@ import { signInWithEmailAndPassword } from 'firebase/auth';
 
 import { requireAuth, configError, missingEnv } from '../../lib/firebase/client.js';
 import { api } from '../../lib/api.js';
+import { homeForRole, safeNext } from '../../lib/homeForRole.js';
 import { useT } from '../../i18n/index.js';
 import LanguageSwitcher from '../../components/shell/LanguageSwitcher.js';
 
@@ -72,8 +73,11 @@ function LoginForm() {
     api.session
       .me()
       .then((res) => {
-        if (cancelled || !res?.user?.trustId) return;
-        router.replace(params.get('next') || '/dashboard');
+        if (cancelled || !res?.user) return;
+        const claim = res.user.roleClaim;
+        // Members and agents have their own apps; everyone else needs a trust.
+        if (claim !== 'member' && claim !== 'agent' && !res.user.trustId) return;
+        router.replace(safeNext(params.get('next'), claim) ?? (claim ? homeForRole(claim) : '/dashboard'));
       })
       .catch(() => {})
       .finally(() => {
@@ -102,9 +106,12 @@ function LoginForm() {
       );
       const idToken = await credential.user.getIdToken();
 
-      await api.session.create(idToken);
+      const res = await api.session.create(idToken);
 
-      router.replace(params.get('next') || '/dashboard');
+      // A registration number is a member logging in; agents and members each
+      // go to their own phone app, staff to the office panel.
+      const claim = res?.user?.roleClaim ?? (identifier.includes('@') ? null : 'member');
+      router.replace(safeNext(params.get('next'), claim) ?? (claim ? homeForRole(claim) : '/dashboard'));
       router.refresh();
     } catch (err) {
       setError(friendlyError(err));

@@ -158,7 +158,16 @@
       ]
     },
     {
-      "//": "Receipt register — all receipts, newest first.",
+      "//": [
+        "Receipt register — all receipts, newest first.",
+        "",
+        "The register also orders by `__name__` as a tie-break, because a bulk",
+        "deposit writes forty receipts carrying the same `paidAtMs` and a cursor",
+        "made of the timestamp alone would skip the other thirty-nine. Firestore",
+        "appends `__name__` to every composite index automatically, so it is",
+        "deliberately NOT listed here — spelling it out is the same index and",
+        "the deploy fails with 409."
+      ],
       "collectionGroup": "payments",
       "queryScope": "COLLECTION",
       "fields": [

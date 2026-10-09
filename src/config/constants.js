@@ -70,6 +70,17 @@ export const paths = {
    * whole — which is also how people think about a list.
    */
   masters: (t) => `trusts/${t}/masters`,
+
+  /**
+   * सदस्य जोड़ने के अनुरोध — what an agent submits from the agent app.
+   *
+   * Trust-level with `programId` as a field, like members. A request is NOT a
+   * member: it burns no registration number, moves no counter and appears in
+   * no index until the office approves it, at which point `createMember` runs
+   * exactly as it does at the counter.
+   */
+  memberRequests: (t) => `trusts/${t}/member_requests`,
+  memberRequest: (t, r) => `trusts/${t}/member_requests/${r}`,
   master: (t, type) => `trusts/${t}/masters/${type}`,
 
   trustIndexes: (t) => `trusts/${t}/indexes`,
@@ -106,6 +117,7 @@ export const EXIT_REASON = {
 
 export const CLOSING_STATUS = {
   ACTIVE: 'active',
+  REVERTING: 'reverting',
   REVERTED: 'reverted',
 };
 
@@ -185,6 +197,15 @@ export const MASTER_TYPES = {
   designation: { label: 'पद', labelEn: 'Designation', parent: null },
 };
 
+export const MEMBER_REQUEST_STATUS = {
+  PENDING: 'pending',
+  /** Briefly, while the approval is creating the member. */
+  APPROVING: 'approving',
+  APPROVED: 'approved',
+  REJECTED: 'rejected',
+  REMOVED: 'removed',
+};
+
 export const PDF_JOB_STATUS = {
   QUEUED: 'queued',
   RUNNING: 'running',
@@ -253,6 +274,13 @@ export const LIMITS = {
    * reads at the counter.
    */
   MAX_BATCH_CLOSINGS: 60,
+  /**
+   * Days after a closing within which its instalment counts as paid on time,
+   * when the closing is not on a notice that names its own last date. A योजना
+   * can override it with `paymentGraceDays`. Used only to label payments in
+   * the member app (समय पर / देर से) — it never changes what anyone owes.
+   */
+  PAYMENT_GRACE_DAYS: 30,
 };
 
 export const CACHE = {

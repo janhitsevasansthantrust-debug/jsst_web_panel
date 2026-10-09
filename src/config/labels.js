@@ -18,3 +18,30 @@ export const MEMBER_STATUS_LABEL = {
 
 export const statusLabelFor = (status) =>
   MEMBER_STATUS_LABEL[status] ?? status ?? '';
+
+/**
+ * How a receipt was paid, and whether it still stands.
+ *
+ * Same reasoning as above, and it matters more here: the receipt, the register
+ * on screen, the CSV a clerk opens and the PDF that gets filed must all call
+ * the same ₹500 "नकद". The screen wraps these in `t()`; the file and the PDF
+ * print them as they are, because both are Hindi documents.
+ */
+export const PAYMENT_METHOD_LABEL = {
+  cash: 'नकद',
+  online: 'ऑनलाइन',
+  upi: 'UPI',
+  cheque: 'चेक',
+  bank: 'बैंक',
+};
+
+export const paymentMethodLabel = (method) =>
+  PAYMENT_METHOD_LABEL[method] ?? method ?? '';
+
+export const PAYMENT_STATUS_LABEL = {
+  completed: 'जमा',
+  cancelled: 'रद्द',
+};
+
+export const paymentStatusLabel = (status) =>
+  PAYMENT_STATUS_LABEL[status] ?? status ?? '';
