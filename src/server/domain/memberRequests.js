@@ -66,24 +66,8 @@ export async function createMemberRequest(scope, input) {
   // An आधार already on a member of this योजना is refused now, not on
   // approval — the agent is standing in front of the family and can sort it out.
   if (input.aadhaarNo) {
-    const clash = await findMemberByAadhaar({ ...scope, programId }, input.aadhaarNo);
-    if (clash) {
-      throw conflict(
-        `यह आधार पहले से सदस्य ${clash.displayName} (रजि. ${clash.registrationNumber}) पर दर्ज है`,
-        { memberId: clash.id, field: 'aadhaarNo' },
-      );
-    }
-    // …and a second request for the same person, still waiting.
-    const dup = await db
-      .collection(paths.memberRequests(scope.trustId))
-      .where('aadhaarNo', '==', input.aadhaarNo)
-      .limit(5)
-      .get();
-    const open = dup.docs.find((x) => x.data().programId === programId
-      && [RS.PENDING, RS.APPROVING].includes(x.data().status));
-    if (open) {
-      throw conflict(`इस आधार का अनुरोध पहले से लंबित है — ${open.data().displayName}`);
-    }
+    const clash = await aadhaarClash(scope, programId, input.aadhaarNo);
+    if (clash) throw conflict(clash.message, { field: 'aadhaarNo', ...(clash.memberId ? { memberId: clash.memberId } : {}) });
   }
 
   const agentSnap = await db.doc(paths.agent(scope.trustId, scope.agentId)).get();
@@ -165,6 +149,37 @@ export async function createMemberRequest(scope, input) {
  * Single-field equality queries only, sorted in memory — so no composite
  * index is needed, and the volume (a few dozen a month) makes that free.
  */
+/**
+ * Is this आधार already used in this योजना — by a member, or by a request still
+ * waiting? Same rule the office form uses (one person, one membership per
+ * योजना). Returns `null` when free, else `{ message, memberId? }`.
+ * `exceptRequestId` skips the request being corrected.
+ */
+export async function aadhaarClash(scope, programId, aadhaar, { exceptRequestId } = {}) {
+  const clean = String(aadhaar ?? '').replace(/\D+/g, '');
+  if (clean.length !== 12) return null;
+
+  const member = await findMemberByAadhaar({ ...scope, programId }, clean);
+  if (member) {
+    return {
+      memberId: member.id,
+      message: `यह आधार पहले से इस योजना में सदस्य ${member.displayName} (रजि. ${member.registrationNumber}) पर दर्ज है`,
+    };
+  }
+  const dup = await db
+    .collection(paths.memberRequests(scope.trustId))
+    .where('aadhaarNo', '==', clean)
+    .limit(10)
+    .get();
+  const open = dup.docs.find((x) => x.id !== exceptRequestId
+    && x.data().programId === programId
+    && [RS.PENDING, RS.APPROVING].includes(x.data().status));
+  if (open) {
+    return { message: `इस आधार का अनुरोध पहले से लंबित है — ${open.data().displayName}` };
+  }
+  return null;
+}
+
 export async function listMemberRequests(scope, { status, agentId, programId } = {}) {
   const col = db.collection(paths.memberRequests(scope.trustId));
   let query;

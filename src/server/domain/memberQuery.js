@@ -148,7 +148,11 @@ export function sortMembers(items, sortBy = 'registrationNumber', sortDir = 'asc
     const bv = key(b);
     if (av < bv) return -1 * dir;
     if (av > bv) return 1 * dir;
-    return numeric(a.reg) - numeric(b.reg);
+    // Same value (e.g. several members joined the same day): the
+    // registration number is handed out in order, so it says who was added
+    // later. Follow the chosen direction — with "नए सदस्य पहले" the member
+    // approved a minute ago must be first among today's joiners, not last.
+    return (numeric(a.reg) - numeric(b.reg)) * (sortBy === 'registrationNumber' ? 1 : dir);
   });
 }
 

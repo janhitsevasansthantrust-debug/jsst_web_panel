@@ -522,7 +522,7 @@ export default function MemberForm({ open, onClose, member }) {
                   afterwards from the master screen. */}
               <AutoComplete
                 allowClear
-                options={masters.jatis}
+                options={masters.jatis.map((j) => ({ value: j.label, label: j.label }))}
                 placeholder={t('जाति')}
                 filterOption={(input, option) =>
                   String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())

@@ -1,3 +1,4 @@
+import { notifyLater } from '../../../server/domain/push.js';
 import { handler, ok, readBody } from '../../../server/http.js';
 import { requireScope } from '../../../server/auth/session.js';
 import { createClosing, listClosings } from '../../../server/domain/closings.js';
@@ -41,5 +42,13 @@ export const POST = handler(async (request) => {
   const input = await readBody(request, closingCreate);
 
   const closing = await createClosing(scope, input);
+
+  // Tell the योजना: members' families and its agents.
+  notifyLater(scope.trustId, { programId: scope.programId }, {
+    title: `नई क्लोजिंग #${closing.seq ?? ''} — ${closing.name ?? input.name ?? ''}`,
+    body: 'नई क्लोजिंग जुड़ी है। अपना बकाया ऐप में देखें और समय पर जमा करें।',
+    url: '/member/closings',
+    kind: 'closing',
+  });
   return ok({ closing }, { status: 201 });
 });

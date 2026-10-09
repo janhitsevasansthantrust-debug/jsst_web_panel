@@ -1,3 +1,4 @@
+import { notifyLater } from '../../../../server/domain/push.js';
 import { handler, ok, readBody } from '../../../../server/http.js';
 import { requireScope } from '../../../../server/auth/session.js';
 import {
@@ -30,9 +31,26 @@ export const PATCH = handler(async (request, context) => {
   if (body.action === 'approve') {
     const { action, ...overrides } = body;
     const result = await approveMemberRequest(scope, id, overrides);
+    if (result.request?.agentId) {
+      notifyLater(scope.trustId, { agentId: result.request.agentId }, {
+        title: `अनुरोध स्वीकार — ${result.request.displayName ?? ''}`,
+        body: `रजि. नंबर ${result.member?.registrationNumber ?? ''} बन गया। सदस्य ऐप लॉगिन: रजि. नंबर + मोबाइल नंबर।`,
+        url: '/agent/requests',
+        kind: 'request',
+      });
+    }
     return ok(result);
   }
-  return ok({ request: await rejectMemberRequest(scope, id, { reason: body.reason }) });
+  const rejected = await rejectMemberRequest(scope, id, { reason: body.reason });
+  if (rejected?.agentId) {
+    notifyLater(scope.trustId, { agentId: rejected.agentId }, {
+      title: `अनुरोध अस्वीकृत — ${rejected.displayName ?? ''}`,
+      body: `कारण: ${body.reason ?? ''} — सुधार कर दोबारा भेजें।`,
+      url: '/agent/requests',
+      kind: 'request',
+    });
+  }
+  return ok({ request: rejected });
 });
 
 /** PUT /api/member-requests/[id] — the agent corrects and re-sends their request. */

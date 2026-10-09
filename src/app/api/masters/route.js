@@ -1,7 +1,7 @@
-import { handler, okCached } from '../../../server/http.js';
-import { requireScope } from '../../../server/auth/session.js';
+import { handler, ok, okCached } from '../../../server/http.js';
+import { requireSession } from '../../../server/auth/session.js';
 import { getAllMasters } from '../../../server/domain/masters.js';
-import { ROLE, MASTER_TYPES } from '../../../config/constants.js';
+import { MASTER_TYPES } from '../../../config/constants.js';
 import {
   states as fallbackStates, districtsByState, gender as fallbackGender,
   relations as fallbackRelations, paymentMethods as fallbackMethods,
@@ -14,14 +14,17 @@ import {
  * privileged data. Editing them is admin-only (see the [type] route).
  */
 export const GET = handler(async (request) => {
-  const scope = await requireScope(request, ROLE.AGENT);
+  // Any signed-in person — the lists are not tied to a योजना, and a login
+  // without a योजना claim must still get its dropdowns.
+  const scope = await requireSession();
   const { masters } = await getAllMasters(scope.trustId);
 
   // `?resolved=1` — the phone app's form: ready-to-use option lists with the
   // same built-in fallbacks the office form uses (lib/useMasters.js), so both
   // forms always offer the same choices.
   if (new URL(request.url).searchParams.get('resolved')) {
-    return okCached({ lists: resolve(masters) }, 300);
+    // Not cached on the phone: a जाति added in the office must show at once.
+    return ok({ lists: resolve(masters) }, { headers: { 'Cache-Control': 'no-store' } });
   }
 
   return okCached({ masters, types: MASTER_TYPES }, 300);

@@ -181,6 +181,24 @@ test('sorts by due amount, descending', () => {
   );
 });
 
+test('"newest first": the last one added leads among the same join date', () => {
+  const day = Date.UTC(2026, 9, 9);
+  const rows = [
+    M({ id: 'old', reg: '50', joinMs: Date.UTC(2026, 9, 1) }),
+    M({ id: 'today1', reg: '120', joinMs: day }),
+    M({ id: 'approvedNow', reg: '125', joinMs: day }),
+    M({ id: 'today2', reg: '121', joinMs: day }),
+  ];
+  assert.deepEqual(
+    sortMembers(rows, 'joinDateMs', 'desc').map((m) => m.id),
+    ['approvedNow', 'today2', 'today1', 'old'],
+  );
+  assert.deepEqual(
+    sortMembers(rows, 'joinDateMs', 'asc').map((m) => m.id),
+    ['old', 'today1', 'today2', 'approvedNow'],
+  );
+});
+
 test('relevance beats the chosen sort while searching', () => {
   const hits = filterMembers(all, { q: 'Ram Kumar' });
   const sorted = sortMembers(hits, 'dueAmount', 'desc');

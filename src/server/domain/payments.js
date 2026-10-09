@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { notifyLater } from './push.js';
+
 import { db, FieldValue, serverNow, inc, chunk } from '../firebase/admin.js';
 import { applyPayment, reverseReceiptItems } from './ledger.js';
 import { getClosingsIndex, patchMemberInIndex, patchMembersInIndex } from './indexes.js';
@@ -186,7 +188,7 @@ async function postOneReceipt(scope, input, closings, uid, groupCodes = new Map(
     ? db.doc(`${paths.idempotency(trustId, programId)}/${input.idempotencyKey}`)
     : null;
 
-  return db.runTransaction(async (tx) => {
+  const out = await db.runTransaction(async (tx) => {
     /* ─── ALL READS FIRST (Firestore requires it) ─────────────────────── */
 
     const [idemSnap, memberSnap, seqSnap, closingIndexSnap] = await Promise.all([
@@ -538,6 +540,25 @@ async function postOneReceipt(scope, input, closings, uid, groupCodes = new Map(
     }
 
     return { receipt: stored, rejected: applied.rejected, replayed: false };
+  });
+
+  // Every receipt — counter, bulk collection, agent, joining fee — tells the
+  // member's family phone. After the transaction, never inside it, and never
+  // able to fail the payment (push.notify swallows its own errors).
+  if (!out.replayed && out.receipt) notifyReceipt(trustId, out.receipt);
+  return out;
+}
+
+function notifyReceipt(trustId, r) {
+  const rs = (n) => `₹${Number(n || 0).toLocaleString('en-IN')}`;
+  const parts = [];
+  if (r.itemCount) parts.push(`${r.itemCount} क्लोजिंग (${rs(r.closingAmount)})`);
+  if (r.joinFeeAmount) parts.push(`नामांकन शुल्क ${rs(r.joinFeeAmount)}`);
+  notifyLater(trustId, { memberId: r.memberId }, {
+    title: `${rs(r.totalAmount)} जमा हुए — रसीद ${r.receiptNo ?? ''}`.trim(),
+    body: `${r.memberSnapshot?.name ?? ''} (रजि. ${r.memberSnapshot?.regNo ?? ''}): ${parts.join(' + ') || 'भुगतान'} जमा। धन्यवाद 🙏`,
+    url: '/member/history',
+    kind: 'receipt',
   });
 }
 

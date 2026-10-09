@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 
 import { handler, ok, badRequest, tooLarge } from '../../../../server/http.js';
-import { requireScope } from '../../../../server/auth/session.js';
+import { requireRole } from '../../../../server/auth/session.js';
 import { adminStorage } from '../../../../server/firebase/admin.js';
 import { ROLE } from '../../../../config/constants.js';
 
@@ -24,24 +24,50 @@ const MAX_BYTES = 10 * 1024 * 1024; // the proxy's request-body limit
 const FOLDERS = new Set(['members', 'documents']);
 
 export const POST = handler(async (request) => {
-  const scope = await requireScope(request, ROLE.AGENT);
+  // Any agent or office login; not tied to a योजना.
+  const scope = await requireRole(ROLE.AGENT);
 
-  const form = await request.formData().catch(() => null);
-  const file = form?.get('file');
-  if (!file || typeof file.arrayBuffer !== 'function') throw badRequest('फ़ाइल नहीं मिली — दोबारा चुनें');
+  // Two ways in: JSON { data: <base64>, folder } from the phone app (React
+  // Native's multipart uploads fail on some Android phones with a bare
+  // "Network request failed"), or a normal multipart form from the browser.
+  let bytes;
+  let folderRaw = '';
+  let declared = '';
+  if ((request.headers.get('content-type') ?? '').includes('application/json')) {
+    const body = await request.json().catch(() => null);
+    const b64 = String(body?.data ?? '').replace(/^data:[^,]*,/, '').replace(/\s+/g, '');
+    if (!b64) {
+      console.warn('[upload] JSON without data', { keys: body ? Object.keys(body) : null });
+      throw badRequest('फोटो का डेटा नहीं पहुँचा — ऐप दोबारा खोलकर फिर कोशिश करें');
+    }
+    bytes = Buffer.from(b64, 'base64');
+    folderRaw = String(body?.folder ?? '');
+    declared = String(body?.name ?? '');
+  } else {
+    const form = await request.formData().catch((e) => {
+      console.warn('[upload] multipart parse failed', request.headers.get('content-type'), e?.message);
+      return null;
+    });
+    const file = form?.get('file');
+    if (!file || typeof file.arrayBuffer !== 'function') {
+      throw badRequest('फ़ाइल नहीं मिली — ऐप का नया वर्ज़न खोलें (reload) और दोबारा चुनें');
+    }
+    bytes = Buffer.from(await file.arrayBuffer());
+    folderRaw = String(form.get('folder') ?? '');
+    declared = `${file.type} ${file.name}`;
+  }
 
-  const bytes = Buffer.from(await file.arrayBuffer());
   if (!bytes.length) throw badRequest('फ़ाइल खाली है');
   if (bytes.length > MAX_BYTES) throw tooLarge('फ़ाइल 10MB से बड़ी है — छोटी फोटो चुनें');
 
   const kind = sniff(bytes);
   if (!kind) {
-    throw badRequest(/heic|heif/i.test(String(file.type) + String(file.name))
+    throw badRequest(/heic|heif/i.test(declared)
       ? 'HEIC फोटो नहीं चलेगी — कैमरा सेटिंग में "Most Compatible" (JPG) चुनें'
       : 'सिर्फ़ JPG, PNG, WebP फोटो या PDF चलेगी');
   }
 
-  const folder = FOLDERS.has(String(form.get('folder'))) ? String(form.get('folder')) : 'members';
+  const folder = FOLDERS.has(folderRaw) ? folderRaw : 'members';
   const bucket = adminStorage.bucket();
   const name = `${folder}/${new Date().getFullYear()}/${scope.role}-${scope.uid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.${kind.ext}`;
   const token = crypto.randomUUID();

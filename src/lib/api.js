@@ -129,6 +129,11 @@ export const api = {
   uploads: { memberDoc: uploadMemberDoc },
 
   /** The phone app's switches — maintenance, update versions, support numbers. */
+  push: {
+    overview: () => request('/push/send'),
+    send: (body) => request('/push/send', { method: 'POST', body }),
+  },
+
   memberLogins: {
     backfill: () => request('/members/logins/backfill', { method: 'POST', body: {} }),
   },

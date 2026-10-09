@@ -163,7 +163,7 @@ function NewRequest() {
             </div>
             <div className="m-grid2">
               <Form.Item name="jati" label={t('जाति')}>
-                <Select size="large" allowClear showSearch options={masters.jatis} placeholder={t('चुनें')} />
+                <Select size="large" allowClear showSearch options={masters.jatis.map((j) => ({ value: j.label, label: j.label }))} placeholder={t('चुनें')} />
               </Form.Item>
               <Form.Item name="gotra" label={t('गोत्र')}>
                 <Input size="large" />
