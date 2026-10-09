@@ -13,8 +13,18 @@ const nextConfig = {
   // so on Vercel every PDF route shipped WITHOUT them and failed with
   // "Devanagari फ़ॉन्ट नहीं मिला: /var/task/src/server/pdf/fonts/…". Listing
   // them here copies them into every API function.
+  //
+  // Same story inside pdfkit (used by @react-pdf): it loads its built-in fonts
+  // through a package-internal alias (`#standard-fonts/Helvetica`) the tracer
+  // does not follow, so the function failed with "Cannot find module
+  // …/pdfkit/js/standard-fonts/Helvetica.cjs". Its font metrics (js/data) are
+  // read from disk the same way.
   outputFileTracingIncludes: {
-    '/api/**/*': ['./src/server/pdf/fonts/*.ttf'],
+    '/api/**/*': [
+      './src/server/pdf/fonts/*.ttf',
+      './node_modules/pdfkit/js/standard-fonts/**/*',
+      './node_modules/pdfkit/js/data/**/*',
+    ],
   },
 
   // Ant Design and the icon set are huge barrels — this rewrites imports so
