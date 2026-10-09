@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { db, serverNow, inc, countQuery } from '../firebase/admin.js';
-import { computeDue, compactLedger, readLedger } from './ledger.js';
+import { computeDue, compactLedger, readLedger, replanForDates } from './ledger.js';
 import {
   getClosingsIndex, patchMemberInIndex, removeMemberFromIndex,
   getMembersIndex, fromMemberEntry,
@@ -599,12 +599,14 @@ export async function updateMember(scope, memberId, patch) {
 
     let ledgerPatch = {};
     if (eligibilityChanged) {
-      const compacted = compactLedger(readLedger(member), next, closings);
-      const due = computeDue({ ...next, ...compacted }, closings);
+      // Unpack the old watermark and re-decide every closing against the new
+      // dates — see ledger.replanForDates for why compacting is not enough.
+      const plan = replanForDates(member, next, closings);
+      if (plan.conflicts.length) throw dateConflict(plan.conflicts);
       ledgerPatch = {
-        ...compacted,
-        dueCount: due.dueCount,
-        dueAmount: due.dueAmount,
+        ...plan.ledger,
+        dueCount: plan.after.dueCount,
+        dueAmount: plan.after.dueAmount,
       };
     }
 
@@ -627,6 +629,91 @@ export async function updateMember(scope, memberId, patch) {
 
   await patchMemberInIndex(trustId, memberId, updated);
   return updated;
+}
+
+/** "These closings are paid — reverse their receipts first." */
+function dateConflict(conflicts) {
+  const list = conflicts.slice(0, 6)
+    .map((c) => `#${c.seq} ${c.name || ''}`.trim())
+    .join(', ');
+  const more = conflicts.length > 6 ? ` +${conflicts.length - 6}` : '';
+  return conflict(
+    `नई तारीख़ से ये क्लोजिंग इस सदस्य पर लागू नहीं होंगी, पर इनका पैसा जमा है: ${list}${more}. ` +
+    'पहले इनकी रसीद रद्द करें, फिर तारीख़ बदलें।',
+  );
+}
+
+/**
+ * What changing a member's joining date / birth date / location group would
+ * do to their bill — WITHOUT saving. Powers the "क्लोजिंग पर असर" card on the
+ * edit form, so the office sees which closings become payable (or stop being
+ * payable) before pressing Save. Same computation as `updateMember`.
+ *
+ * Cost: 1 member read + the cached closings index + the cached program.
+ */
+export async function previewMemberDates(scope, memberId, input) {
+  const { trustId, programId } = scope;
+  const [{ items: closings }, program, snap] = await Promise.all([
+    getClosingsIndex(trustId, programId),
+    getProgram(scope, programId),
+    db.doc(paths.member(trustId, memberId)).get(),
+  ]);
+  if (!snap.exists) throw notFound('Member not found');
+  const member = { id: snap.id, ...snap.data() };
+  assertSameProgram(member, programId);
+
+  const pick = (k) => (input[k] !== undefined && input[k] !== null && input[k] !== '' ? Number(input[k]) : undefined);
+  const joinDateMs = pick('joinDateMs') ?? member.joinDateMs;
+  const bobDateMs = pick('bobDateMs') ?? member.bobDateMs;
+  const locationGroupId = input.locationGroupId ?? member.locactionGroupId;
+  if (!Number.isFinite(Number(joinDateMs))) throw badRequest('जुड़ने की तारीख़ सही नहीं');
+
+  let rates = {};
+  let rateError = null;
+  try {
+    rates = resolveMemberRates(program, { bobDateMs, joinDateMs, locationGroupId });
+  } catch (e) {
+    rateError = e?.message ?? 'आयु समूह नहीं मिला';
+  }
+  const next = { ...member, joinDateMs, bobDateMs, ...rates };
+  const plan = replanForDates(member, next, closings);
+
+  const brief = (d) => ({
+    eligibleCount: d.eligibleCount, eligibleAmount: d.eligibleAmount,
+    dueCount: d.dueCount, dueAmount: d.dueAmount, settledCount: d.settledCount,
+  });
+  return {
+    member: {
+      id: member.id, registrationNumber: member.registrationNumber, displayName: member.displayName,
+      joinDateMs: member.joinDateMs, payAmount: member.payAmount ?? 0, joinFees: member.joinFees ?? 0,
+      ageGroupRange: member.ageGroupRange ?? '',
+    },
+    next: {
+      joinDateMs, payAmount: next.payAmount ?? 0, joinFees: next.joinFees ?? 0,
+      ageGroupRange: next.ageGroupRange ?? '',
+    },
+    rateError,
+    before: brief(plan.before),
+    after: brief(plan.after),
+    added: plan.added,
+    removed: plan.removed,
+    conflicts: plan.conflicts,
+    // Every closing this member is billed for after the change, with its state.
+    closings: plan.rows
+      .filter((r) => r.nowEligible)
+      .map((r) => {
+        const due = plan.after.dueItems.find((d) => d.seq === r.seq);
+        return {
+          seq: r.seq, closingId: r.closingId, name: r.name, regNo: r.regNo, dateMs: r.dateMs,
+          amount: r.amountAfter,
+          status: due ? (due.partial ? 'partial' : 'due') : (r.state === 'exempt' ? 'exempt' : 'paid'),
+          remaining: due?.remaining ?? 0,
+          isNew: !r.wasEligible,
+        };
+      })
+      .sort((a, b) => b.dateMs - a.dateMs),
+    canSave: plan.conflicts.length === 0 && !rateError,
+  };
 }
 
 /** Soft delete — the record stays, so receipts referencing it still resolve. */

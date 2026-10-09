@@ -18,6 +18,7 @@ import { resolveRegistrationConfig, previewRegistration } from '../../lib/regist
 import { useMasters } from '../../lib/useMasters.js';
 import { MEMBER_STATUS } from '../../config/constants.js';
 import PhotoUpload from './PhotoUpload.js';
+import JoinDateImpact from './JoinDateImpact.js';
 import { useT } from '../../i18n/index.js';
 
 const { Text, Paragraph } = Typography;
@@ -104,6 +105,9 @@ export default function MemberForm({ open, onClose, member }) {
   const bobDate = Form.useWatch('bobDate', form);
   const joinDate = Form.useWatch('joinDate', form);
   const joinFeesDone = Form.useWatch('joinFeesDone', form);
+  const locationGroupIdW = Form.useWatch('locationGroupId', form);
+  // A new joining date that would drop a PAID closing cannot be saved.
+  const [dateBlocked, setDateBlocked] = useState(false);
   const joinFeesPaidNow = Form.useWatch('joinFeesPaidNow', form);
 
   const lookup = useQuery({
@@ -254,7 +258,9 @@ export default function MemberForm({ open, onClose, member }) {
     onSuccess: (res) => {
       message.success(
         editing
-          ? t('सदस्य अपडेट हो गया')
+          ? (fullRecord && res.member?.joinDateMs !== fullRecord.joinDateMs
+            ? t('सदस्य अपडेट हो गया — नई तारीख़ से बकाया दोबारा गिना गया')
+            : t('सदस्य अपडेट हो गया'))
           : t('सदस्य जुड़ गया — रजि. नंबर {n}', { n: res.member?.registrationNumber ?? '' }),
       );
       // The member-app login made with the member (reg. no. + mobile).
@@ -278,6 +284,8 @@ export default function MemberForm({ open, onClose, member }) {
       } else {
         queryClient.invalidateQueries({ queryKey: ['members'] });
         queryClient.invalidateQueries({ queryKey: keys.stats });
+        // The member's own drawer: dues and closing list follow the new dates.
+        if (editing) queryClient.invalidateQueries({ queryKey: keys.member(member.id) });
       }
       // The joining fee now produces a receipt. Offer it immediately — the
       // member is still standing at the counter, and this is the moment they
@@ -327,7 +335,7 @@ export default function MemberForm({ open, onClose, member }) {
           <Button
             type="primary"
             loading={save.isPending}
-            disabled={!programId || noProgramRules || loadingMember}
+            disabled={!programId || noProgramRules || loadingMember || dateBlocked}
             onClick={() => form.submit()}
           >
             {t('सहेजें')}
@@ -669,6 +677,17 @@ export default function MemberForm({ open, onClose, member }) {
 
         <RateCard matched={matched} program={program} hasDates={Boolean(bobDate && joinDate)} />
 
+        {editing && fullRecord ? (
+          <JoinDateImpact
+            memberId={member.id}
+            saved={fullRecord}
+            joinDate={joinDate}
+            bobDate={bobDate}
+            locationGroupId={locationGroupIdW}
+            onBlock={setDateBlocked}
+          />
+        ) : null}
+
         {/* ── पता जानकारी ───────────────────────────────────────────────── */}
         <Divider orientation="left">{t('पता जानकारी')}</Divider>
 
@@ -930,7 +949,7 @@ export default function MemberForm({ open, onClose, member }) {
           <Input
             disabled={editing}
             style={{ maxWidth: 280 }}
-            addonBefore={regConfig.prefix || undefined}
+            prefix={regConfig.prefix ? <Text type="secondary">{regConfig.prefix}</Text> : undefined}
             placeholder={editing ? '' : regPreview}
           />
         </Form.Item>

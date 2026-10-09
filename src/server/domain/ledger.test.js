@@ -19,6 +19,7 @@ import {
   applyExemption,
   rebuildLedger,
   readLedger,
+  replanForDates,
 } from './ledger.js';
 
 /* ── fixtures ─────────────────────────────────────────────────────────────── */
@@ -462,4 +463,65 @@ test('garbage in the ledger fields is normalised, never thrown on', () => {
   assert.deepEqual(l.paidSeqs, [3, 9]);
   assert.deepEqual(l.exemptSeqs, []);
   assert.deepEqual(l.partialPaid, { 5: 50 });
+});
+
+/* ── replanForDates: editing the joining date ─────────────────────────────── */
+
+const acc = (extra) => ({ id: 'm1', status: 'accepted', payAmount: 200, ...extra });
+
+test('replan: joining earlier makes the older closings due (they were only absorbed)', () => {
+  // joined D(15) → closings 1-5 (D10..D14) never owed; watermark absorbed them.
+  const before = acc({ joinDateMs: D(15) });
+  const stored = { ...before, ...compactLedger(readLedger(before), before, closings) };
+  assert.equal(stored.paidUpTo, 5);
+  const after = { ...stored, joinDateMs: D(12) }; // now owes 3,4,5 too
+  const r = replanForDates(stored, after, closings);
+  assert.deepEqual(r.added.map((x) => x.seq), [3, 4, 5]);
+  assert.equal(r.conflicts.length, 0);
+  assert.equal(r.after.dueCount, 8); // 3..10
+  assert.equal(r.before.dueCount, 5); // 6..10
+  assert.equal(r.ledger.paidUpTo, 2);
+});
+
+test('replan: paid closings stay paid when joining earlier', () => {
+  // joined D(15), paid closings 6 and 7.
+  let m = acc({ joinDateMs: D(15) });
+  m = { ...m, ...applyPayment(m, [6, 7], closings).ledger };
+  const r = replanForDates(m, { ...m, joinDateMs: D(10) }, closings);
+  assert.deepEqual(r.after.dueSeqs, [1, 2, 3, 4, 5, 8, 9, 10]);
+  assert.equal(r.conflicts.length, 0);
+});
+
+test('replan: joining later than a PAID closing is a conflict, never a silent drop', () => {
+  let m = acc({ joinDateMs: D(10) });
+  m = { ...m, ...applyPayment(m, [1, 2], closings).ledger };
+  const r = replanForDates(m, { ...m, joinDateMs: D(12) }, closings);
+  assert.deepEqual(r.conflicts.map((x) => x.seq), [1, 2]);
+  assert.deepEqual(r.removed.map((x) => x.seq), [1, 2]);
+});
+
+test('replan: joining later than UNPAID closings simply stops billing them', () => {
+  const m = acc({ joinDateMs: D(10) });
+  const r = replanForDates(m, { ...m, joinDateMs: D(13) }, closings);
+  assert.equal(r.conflicts.length, 0);
+  assert.deepEqual(r.removed.map((x) => x.seq), [1, 2, 3]);
+  assert.equal(r.after.dueCount, 7);
+});
+
+test('replan: a new rate re-prices what is due, never what was paid', () => {
+  let m = acc({ joinDateMs: D(10) });
+  m = { ...m, ...applyPayment(m, [1], closings).ledger };
+  const r = replanForDates(m, { ...m, payAmount: 300 }, closings);
+  assert.equal(r.after.dueCount, 9);
+  assert.equal(r.after.dueAmount, 9 * 300);
+  assert.ok(!r.after.dueSeqs.includes(1));
+});
+
+test('replan: a part-paid closing keeps its part payment', () => {
+  let m = acc({ joinDateMs: D(10) });
+  m = { ...m, ...applyPayment(m, [3], closings, { amounts: { 3: 50 } }).ledger };
+  const r = replanForDates(m, { ...m, joinDateMs: D(9) }, closings);
+  const three = r.after.dueItems.find((d) => d.seq === 3);
+  assert.equal(three.alreadyPaid, 50);
+  assert.equal(three.remaining, 150);
 });

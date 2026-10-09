@@ -159,6 +159,8 @@ export const api = {
      * whole thing is answered from the search index, so twelve filters cost
      * the same as none.
      */
+    /** What a new joining / birth date would do to this member's bill — nothing saved. */
+    previewDates: (id, body) => request(`/members/${id}/preview-dates`, { method: 'POST', body }),
     list: (params, signal) => request(`/members${qs(params)}`, { signal }),
     search: (q, params, signal) =>
       request(`/members/search${qs({ q, ...params })}`, { signal }),

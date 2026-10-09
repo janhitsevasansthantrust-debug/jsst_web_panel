@@ -684,3 +684,109 @@ export function diffLedger(stored, rebuilt) {
 
   return problems.length ? problems : null;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Changing the dates a member is billed by
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Re-plan a ledger when the dates (or rate) that decide eligibility change —
+ * an edited joining date, a corrected birth date that moves the age band.
+ *
+ * Why `compactLedger` alone is not enough: the watermark `paidUpTo` absorbs
+ * closings the member was NEVER eligible for, not only paid ones. A member
+ * who joined at closing 50 sits at `paidUpTo: 49` having paid nothing. Move
+ * the joining date earlier and closings 40–49 are now owed — but they are
+ * under the watermark, so they would stay silently "settled". So the old
+ * watermark is first unpacked into what it really meant:
+ *
+ *   • a closing the member WAS eligible for and is under the watermark (or in
+ *     `paidSeqs`) was settled by money — it stays settled;
+ *   • a closing they were NOT eligible for was only absorbed — it is
+ *     forgotten, and the new dates decide it afresh.
+ *
+ * Money is never re-priced (a closing paid in full at ₹300 stays paid when
+ * the rate becomes ₹400), and money is never dropped: a settled or partly
+ * paid closing the NEW dates would no longer bill comes back in `conflicts`,
+ * and the caller must refuse the change until those receipts are reversed.
+ *
+ * @param {object} before   the member as stored (with its ledger)
+ * @param {object} after    the member with the new dates / rate applied
+ * @param {Array}  closings the closings index
+ * @returns {{ledger:object, conflicts:Array, added:Array, removed:Array,
+ *            before:object, after:object, rows:Array}}
+ */
+export function replanForDates(before, after, closings) {
+  const old = readLedger(before);
+  const paidSet = new Set(old.paidSeqs);
+  const exemptSet = new Set(old.exemptSeqs);
+
+  const settledPaid = new Set();   // settled by money (or a waiver) under the old dates
+  const exempt = new Set();
+  const partial = {};
+  const conflicts = [];
+  const added = [];
+  const removed = [];
+  const rows = [];
+
+  const sorted = [...closings].sort((a, b) => a.seq - b.seq);
+  for (const c of sorted) {
+    const wasEligible = isEligible(before, c);
+    const nowEligible = isEligible(after, c);
+    const seq = c.seq;
+
+    let state = 'none';
+    if (wasEligible) {
+      if (exemptSet.has(seq)) state = 'exempt';
+      else if (seq <= old.paidUpTo || paidSet.has(seq)) state = 'paid';
+      else if (old.partialPaid[seq] > 0) state = 'partial';
+      else state = 'due';
+    } else if (paidSet.has(seq)) {
+      state = 'paid'; // paid while it looked owed — still money, keep it
+    } else if (old.partialPaid[seq] > 0) {
+      state = 'partial';
+    } else if (exemptSet.has(seq)) {
+      state = 'exempt';
+    }
+
+    if (state === 'paid') settledPaid.add(seq);
+    if (state === 'exempt') exempt.add(seq);
+    if (state === 'partial') partial[seq] = old.partialPaid[seq];
+
+    const info = {
+      seq,
+      closingId: c.id,
+      name: c.name ?? c.displayName ?? '',
+      regNo: c.regNo ?? c.registrationNumber ?? '',
+      dateMs: c.dateMs,
+      batchId: c.batchId ?? null,
+      amountBefore: wasEligible ? amountFor(before, c) : 0,
+      amountAfter: nowEligible ? amountFor(after, c) : 0,
+      paid: state === 'paid' ? (wasEligible ? amountFor(before, c) : 0) : (partial[seq] ?? 0),
+      state,
+    };
+
+    if (!nowEligible && (state === 'paid' || state === 'partial')) conflicts.push(info);
+    if (nowEligible && !wasEligible) added.push(info);
+    if (!nowEligible && wasEligible) removed.push(info);
+    if (wasEligible || nowEligible) rows.push({ ...info, wasEligible, nowEligible });
+  }
+
+  const base = {
+    paidUpTo: 0,
+    paidSeqs: [...settledPaid].sort((a, b) => a - b),
+    exemptSeqs: [...exempt].sort((a, b) => a - b),
+    partialPaid: partial,
+  };
+  const ledger = compactLedger(base, after, closings);
+
+  return {
+    ledger,
+    conflicts,
+    added,
+    removed,
+    rows,
+    before: computeDue(before, closings),
+    after: computeDue({ ...after, ...ledger }, closings),
+  };
+}

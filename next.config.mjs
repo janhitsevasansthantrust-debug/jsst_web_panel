@@ -8,6 +8,15 @@ const nextConfig = {
     'exceljs',
   ],
 
+  // The Devanagari fonts are read with a path built at runtime
+  // (src/server/pdf/renderer.js), which the build's file tracer cannot see —
+  // so on Vercel every PDF route shipped WITHOUT them and failed with
+  // "Devanagari फ़ॉन्ट नहीं मिला: /var/task/src/server/pdf/fonts/…". Listing
+  // them here copies them into every API function.
+  outputFileTracingIncludes: {
+    '/api/**/*': ['./src/server/pdf/fonts/*.ttf'],
+  },
+
   // Ant Design and the icon set are huge barrels — this rewrites imports so
   // only the components actually used end up in the bundle.
   experimental: {
