@@ -17,7 +17,7 @@ import {
 } from '../../lib/registration.js';
 import { postPayment } from './payments.js';
 import { memberKeywords } from '../../lib/memberSearch.js';
-import { joinFeesState } from '../../lib/joinFees.js';
+import { joinFeesState, joinFeeSplit } from '../../lib/joinFees.js';
 import { badRequest, conflict, notFound } from '../errors.js';
 import { assertSameProgram } from './scope.js';
 import {
@@ -304,6 +304,8 @@ export async function createMember(scope, input) {
       age: rates.age,
       payAmount: rates.payAmount,
       joinFees: rates.joinFees,
+      /** किश्त में नामांकन शुल्क: what the band takes at enrolment. */
+      joinFeeAtJoin: rates.joinFeeAtJoin ?? rates.joinFees,
       locactionGroupId: rates.locactionGroupId,
       locationGroup: rates.locationGroup,
       memberGroup: rates.memberGroup,
@@ -449,12 +451,21 @@ export async function createMember(scope, input) {
    * only ticked the box (which is what every older caller sends), and never
    * more than the fee itself — the age band sets that, not the form.
    */
+  /**
+   * किश्त में नामांकन शुल्क: a band that takes ₹2,100 of ₹11,000 at enrolment
+   * defaults to ₹2,100 here, not the whole fee. The rest stays as
+   * `joinFeesDue` and is settled at the member's closing.
+   */
   const feeTotal = Number(created.joinFees) || 0;
+  const feeAtJoin = joinFeeSplit({
+    joinFee: feeTotal,
+    joinFeeAtJoin: created.joinFeeAtJoin,
+  }).atJoin;
   const feeNow = Math.min(
     feeTotal,
     input.joinFeesPaidNow !== undefined
       ? Number(input.joinFeesPaidNow) || 0
-      : (input.joinFeesDone ? feeTotal : 0),
+      : (input.joinFeesDone ? feeAtJoin : 0),
   );
 
   if (feeNow > 0) {
@@ -465,7 +476,9 @@ export async function createMember(scope, input) {
       method: input.joinFeesMethod ?? PAYMENT_METHOD.CASH,
       paidAtMs: created.joinDateMs ?? Date.now(),
       reference: input.joinFeesTxtId ?? '',
-      note: feeNow < feeTotal ? 'नामांकन शुल्क (आंशिक)' : 'नामांकन शुल्क',
+      note: feeNow < feeTotal
+        ? `नामांकन शुल्क (आंशिक) — ₹${feeTotal - feeNow} बाकी`
+        : 'नामांकन शुल्क',
       // Whoever enrolled them collected it. This is the line that pays the
       // agent their enrolment commission, through exactly the same code path
       // as every other receipt.
@@ -550,7 +563,7 @@ export async function updateMember(scope, memberId, patch) {
     const {
       paidUpTo, paidSeqs, exemptSeqs, partialPaid,
       paidCount, paidAmount, dueCount, dueAmount,
-      payAmount, joinFees, ageGroup, ageGroupRange,
+      payAmount, joinFees, joinFeeAtJoin, ageGroup, ageGroupRange,
       agentName, addedByName,
       ...safe
     } = patch;
@@ -590,6 +603,16 @@ export async function updateMember(scope, memberId, patch) {
       safe.agentId = reassigned.agentId;
       safe.agentName = reassigned.agentName;
       safe.addedByName = reassigned.agentName || 'Admin';
+    }
+
+    /**
+     * किश्त में नामांकन शुल्क set for this one member from the edit form.
+     * Applied after the band re-derivation above, so an explicit figure wins;
+     * capped at their own fee, and blank/0 means "all of it at joining".
+     */
+    if (patch.joinFeeAtJoin !== undefined) {
+      const total = Number(safe.joinFees ?? member.joinFees) || 0;
+      safe.joinFeeAtJoin = joinFeeSplit({ joinFee: total, joinFeeAtJoin: patch.joinFeeAtJoin }).atJoin;
     }
 
     const next = { ...member, ...safe };

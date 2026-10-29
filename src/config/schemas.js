@@ -217,6 +217,13 @@ function asPatch(objectSchema) {
 export const memberUpdate = asPatch(memberCreate).extend({
   joinDateMs: dateMs.optional(),
   bobDateMs: dateMs.optional(),
+  /**
+   * किश्त में नामांकन शुल्क, for one member: how much of their fee counts as
+   * taken "at joining". Blank/0 = the whole fee. Capped server-side at the
+   * member's own fee. Changes no money — only what is shown as due at closing
+   * and how far agent commission reaches.
+   */
+  joinFeeAtJoin: money.optional().nullable(),
 });
 
 /**
@@ -381,6 +388,14 @@ export const closingPayout = z.object({
   paymentMode: optionalText(40),
   /** This member's own arrears, deducted from what they receive. */
   oldPending: money.optional(),
+  /**
+   * The member's unpaid joining fee, taken out of this payout.
+   *
+   * Not just a number on the paper: saving it writes a joining-fee receipt
+   * (method "समायोजन") so the fee is settled on the member too. The receipt's
+   * id is kept on the payout by the server and is not settable from here.
+   */
+  joinFeeDeducted: money.optional(),
   netAmount: money.optional(),
   payoutDate: optionalText(20),
 });
@@ -707,6 +722,13 @@ export const ageGroupSchema = z.object({
   startAge: z.coerce.number().min(0).max(150),
   endAge: z.coerce.number().min(0).max(150),
   joinFee: money.default(0),
+  /**
+   * किश्त में नामांकन शुल्क: how much of `joinFee` is taken when the member
+   * enrols — ₹2,100 of ₹11,000, say. The rest stays outstanding on the member
+   * and is collected or deducted at their closing. Blank or 0 = the whole fee
+   * up front, which is what every band did before this existed.
+   */
+  joinFeeAtJoin: money.optional().nullable(),
   payAmount: money.default(0),
 });
 
@@ -762,8 +784,25 @@ export const programCreate = z
      */
     registration: registrationConfig.optional(),
     commissionPolicy: commissionPolicy.partial().optional(),
+
+    /**
+     * What happens to the unpaid part of a joining fee when the member is
+     * closed: `deduct` it from the सहयोग राशि, or `collect` it at the counter.
+     * Only a default for the closing form — each closing can still choose.
+     */
+    joinFeeBalance: z.enum(['deduct', 'collect']).optional(),
   })
   .superRefine((value, ctx) => {
+    value.ageGroups.forEach((g, i) => {
+      if (g.joinFeeAtJoin && g.joinFeeAtJoin > g.joinFee) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['ageGroups', i, 'joinFeeAtJoin'],
+          message: 'जुड़ते समय की राशि कुल शुल्क से ज़्यादा नहीं हो सकती',
+        });
+      }
+    });
+
     // Overlapping bands make a member's rate ambiguous, and a gap makes them
     // unaddable. Catch it here rather than when someone can't be registered.
     const sorted = [...value.ageGroups].sort((a, b) => a.startAge - b.startAge);

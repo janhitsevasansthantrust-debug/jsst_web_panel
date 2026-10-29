@@ -13,6 +13,8 @@ import {
 } from './indexes.js';
 import { resolveBatch, bumpBatch, setClosingBatch } from './closingBatches.js';
 import { reverseCommission, round2 } from './commission.js';
+import { postPayment, cancelPayment } from './payments.js';
+import { joinFeesState, JOIN_FEE_BALANCE } from '../../lib/joinFees.js';
 
 import { eligibleForClosing } from '../../lib/closingEligibility.js';
 import { collectionReport } from './collectionReport.js';
@@ -24,6 +26,7 @@ import {
   EXIT_REASON,
   LIMITS,
   MEMBER_STATUS,
+  PAYMENT_METHOD,
   PAYMENT_STATUS,
   paths,
 } from '../../config/constants.js';
@@ -321,6 +324,21 @@ export async function revertClosing(scope, closingId, opts) {
     ? (closing.refundMode ?? 'keep')
     : (opts.refundMode ?? 'keep');
 
+  /**
+   * किश्त में नामांकन शुल्क: the joining fee that was taken out of this
+   * closing's payout goes back to being due on the member.
+   *
+   * That deduction is a receipt of its own (method "समायोजन", no seqs), so the
+   * payer query below never finds it. Left alone, a reverted closing would
+   * leave the member's fee marked settled by money the family was never
+   * handed. Cancelled first, through the ordinary cancel path, so the member,
+   * the stats and the agent's commission all move back together.
+   */
+  await cancelClosingJoinFeeReceipt(scope, closingRef, closing.payout, {
+    uid,
+    reason: `क्लोजिंग #${closing.seq} वापस ली गई — नामांकन शुल्क कटौती रद्द`,
+  });
+
   const seq = closing.seq;
   const { items: closings } = await getClosingsIndex(trustId, programId);
   const withoutClosing = closings.map((item) => item.seq === seq
@@ -611,6 +629,17 @@ export async function getClosingCollection(scope, closingId, { cursor, limit = L
   const closing = { id: closingSnap.id, ...closingSnap.data() };
   const entry = closings.find((c) => c.id === closingId);
 
+  /**
+   * The closed member and the योजना, for the समापन पत्र form: what is still
+   * outstanding on the member's joining fee, and whether this योजना deducts
+   * it from the payout or collects it. Two reads, independent of trust size.
+   */
+  const [ownerSnap, programSnap] = await db.getAll(
+    db.doc(paths.member(trustId, closing.memberId)),
+    db.doc(paths.program(trustId, programId)),
+  );
+  const ownerFee = ownerSnap.exists ? joinFeesState(ownerSnap.data()) : null;
+
   const report = await collectionReport(scope, { closingId });
   const rows = report.rows.map((member) => ({
     id: member.id, memberId: member.id,
@@ -648,6 +677,20 @@ export async function getClosingCollection(scope, closingId, { cursor, limit = L
       pendingCount: rows.filter((r) => r.remaining > 0).length,
       pendingAmount: report.totals.dueAmount,
       status: closing.status,
+
+      memberId: closing.memberId,
+      notes: closing.notes ?? '',
+      /**
+       * The saved समापन पत्र figures. Not returned before, so the edit form
+       * always opened on its seeded defaults and a payout that had been saved
+       * looked as if it had not been.
+       */
+      payout: closing.payout ?? null,
+      /** The closed member's joining fee — total, paid, still due. */
+      memberJoinFee: ownerFee,
+      joinFeeBalance: programSnap.exists
+        ? (programSnap.data().joinFeeBalance ?? JOIN_FEE_BALANCE.DEDUCT)
+        : JOIN_FEE_BALANCE.DEDUCT,
 
       /**
        * What happened when it was taken back.
@@ -753,10 +796,19 @@ export async function updateClosing(scope, closingId, input) {
 
   /** The money on the समापन पत्र — what the family was handed, and against what. */
   if (input.payout) {
+    const { joinFeeDeducted, ...rest } = input.payout;
     patch.payout = {
       ...(closing.payout ?? {}),
-      ...input.payout,
+      ...rest,
     };
+
+    if (joinFeeDeducted !== undefined) {
+      Object.assign(patch.payout, await settleClosingJoinFee(scope, ref, {
+        closingId,
+        closing,
+        amount: joinFeeDeducted,
+      }));
+    }
   }
 
   if (input.closingDate !== undefined && input.closingDate !== closing.closingDate ||
@@ -779,4 +831,98 @@ export async function updateClosing(scope, closingId, input) {
   await ref.update(patch);
 
   return { id: closingId, ...closing, ...patch, updatedAt: null };
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   किश्त में नामांकन शुल्क — the joining fee settled out of a closing payout
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Make the joining fee taken out of this payout a real receipt.
+ *
+ * A member who joined on ₹2,100 of an ₹11,000 fee still owes ₹8,900 when they
+ * are closed. Typing that onto the समापन पत्र alone would change the paper and
+ * nothing else: the member would go on showing the fee as due, the day's
+ * collection would not include it and the agent would never see commission on
+ * it. So the deduction is posted through `postPayment` — the one path that
+ * moves money — as a joining-fee-only receipt with method "समायोजन".
+ *
+ * Changing the figure later cancels the previous receipt (with a reason, like
+ * every cancellation) and writes a new one; setting it to 0 just cancels.
+ * `postPayment` re-checks the amount against what is really outstanding,
+ * inside its own transaction, so this can never take more than is due.
+ *
+ * @returns {{joinFeeDeducted:number, joinFeeReceiptId:string|null,
+ *            joinFeeReceiptNo:string|null}} fields for `payout`
+ */
+async function settleClosingJoinFee(scope, closingRef, { closingId, closing, amount }) {
+  const want = round2(Number(amount) || 0);
+  const previous = await liveJoinFeeReceipt(scope, closing.payout);
+  const previousAmount = previous ? round2(Number(previous.joinFeeAmount) || 0) : 0;
+
+  if (previous && previousAmount === want) {
+    return {
+      joinFeeDeducted: want,
+      joinFeeReceiptId: previous.id,
+      joinFeeReceiptNo: previous.receiptNo ?? null,
+    };
+  }
+
+  if (previous) {
+    await cancelClosingJoinFeeReceipt(scope, closingRef, closing.payout, {
+      uid: scope.uid,
+      reason: `क्लोजिंग #${closing.seq} — समापन पत्र में नामांकन शुल्क कटौती ₹${previousAmount} से ₹${want} की गई`,
+    });
+  }
+
+  if (want <= 0) {
+    return { joinFeeDeducted: 0, joinFeeReceiptId: null, joinFeeReceiptNo: null };
+  }
+
+  const posted = await postPayment(scope, {
+    memberId: closing.memberId,
+    seqs: [],
+    joinFeeAmount: want,
+    method: PAYMENT_METHOD.ADJUSTMENT,
+    paidAtMs: Date.now(),
+    reference: `क्लोजिंग #${closing.seq}`,
+    note: `नामांकन शुल्क — क्लोजिंग #${closing.seq} की सहयोग राशि से काटा गया`,
+    idempotencyKey: `closingfee:${closingId}:${want}:${Date.now()}`,
+  });
+
+  return {
+    joinFeeDeducted: want,
+    joinFeeReceiptId: posted.receipt?.id ?? null,
+    joinFeeReceiptNo: posted.receipt?.receiptNo ?? null,
+  };
+}
+
+/** The payout's joining-fee receipt, if it exists and still stands. */
+async function liveJoinFeeReceipt(scope, payout) {
+  const id = payout?.joinFeeReceiptId;
+  if (!id) return null;
+  const snap = await db.doc(paths.payment(scope.trustId, scope.programId, id)).get();
+  if (!snap.exists || snap.data().status !== PAYMENT_STATUS.COMPLETED) return null;
+  return { id: snap.id, ...snap.data() };
+}
+
+/**
+ * Cancel the payout's joining-fee receipt and clear it off the closing.
+ *
+ * A receipt somebody already cancelled from the receipts screen is simply
+ * forgotten here — there is nothing left to reverse.
+ */
+async function cancelClosingJoinFeeReceipt(scope, closingRef, payout, { uid, reason }) {
+  const live = await liveJoinFeeReceipt(scope, payout);
+  if (live) {
+    await cancelPayment(scope, live.id, { uid, reason });
+  }
+  if (payout?.joinFeeReceiptId) {
+    await closingRef.update({
+      'payout.joinFeeDeducted': 0,
+      'payout.joinFeeReceiptId': null,
+      'payout.joinFeeReceiptNo': null,
+      updatedAt: serverNow(),
+    });
+  }
 }

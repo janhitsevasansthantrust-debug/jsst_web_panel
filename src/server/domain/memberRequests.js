@@ -118,6 +118,8 @@ export async function createMemberRequest(scope, input) {
     age: rates.age ?? null,
     payAmount: rates.payAmount ?? 0,
     joinFees: fee,
+    /** किश्त में नामांकन शुल्क: what the band takes at enrolment. */
+    joinFeeAtJoin: rates.joinFeeAtJoin ?? fee,
 
     // The agent's claim about money in hand. Not a receipt.
     joinFeesCollected: collected,

@@ -138,6 +138,12 @@ export const PAYMENT_METHOD = {
   UPI: 'upi',
   CHEQUE: 'cheque',
   BANK: 'bank',
+  /**
+   * Not money that crossed the counter: a joining fee settled by taking it out
+   * of the member's own closing payout. Kept separate so the cash book and the
+   * bank statement can still be reconciled against the other methods.
+   */
+  ADJUSTMENT: 'adjustment',
 };
 
 export const COMMISSION_TYPE = {

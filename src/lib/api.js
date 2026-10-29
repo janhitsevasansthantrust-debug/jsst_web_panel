@@ -271,6 +271,9 @@ export const api = {
     create: (body) => request('/programs', { method: 'POST', body }),
     update: (id, body) => request(`/programs/${id}`, { method: 'PATCH', body }),
     remove: (id) => request(`/programs/${id}`, { method: 'DELETE' }),
+    /** किश्त में नामांकन शुल्क: existing members — preview, then apply. */
+    joinFeeSplitPreview: (id) => request(`/programs/${id}/apply-join-fee-split`),
+    applyJoinFeeSplit: (id) => request(`/programs/${id}/apply-join-fee-split`, { method: 'POST' }),
   },
   groups: {
     list: () => request('/groups'),

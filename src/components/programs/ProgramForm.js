@@ -59,6 +59,7 @@ export default function ProgramForm({ open, onClose, program }) {
         receiptPrefix: program.receiptPrefix ?? 'RSD',
         ageGroups: program.ageGroups?.length ? program.ageGroups : [blankAge()],
         locationGroups: program.locationGroups ?? [],
+        joinFeeBalance: program.joinFeeBalance ?? 'deduct',
       });
     } else {
       form.resetFields();
@@ -72,6 +73,7 @@ export default function ProgramForm({ open, onClose, program }) {
         },
         ageGroups: [blankAge()],
         locationGroups: [],
+        joinFeeBalance: 'deduct',
       });
     }
   }, [open, program, form]);
@@ -215,7 +217,7 @@ export default function ProgramForm({ open, onClose, program }) {
                   }
                 >
                   <Row gutter={12}>
-                    <Col xs={12} md={6}>
+                    <Col xs={12} md={8}>
                       <Form.Item
                         name={[field.name, 'startAge']}
                         label={t('शुरुआती आयु')}
@@ -224,7 +226,7 @@ export default function ProgramForm({ open, onClose, program }) {
                         <InputNumber min={0} max={150} style={{ width: '100%' }} />
                       </Form.Item>
                     </Col>
-                    <Col xs={12} md={6}>
+                    <Col xs={12} md={8}>
                       <Form.Item
                         name={[field.name, 'endAge']}
                         label={t('अंतिम आयु')}
@@ -233,7 +235,7 @@ export default function ProgramForm({ open, onClose, program }) {
                         <InputNumber min={0} max={150} style={{ width: '100%' }} />
                       </Form.Item>
                     </Col>
-                    <Col xs={12} md={6}>
+                    <Col xs={12} md={8}>
                       <Form.Item
                         name={[field.name, 'joinFee']}
                         label={t('नामांकन शुल्क')}
@@ -242,13 +244,43 @@ export default function ProgramForm({ open, onClose, program }) {
                         <InputNumber min={0} prefix="₹" style={{ width: '100%' }} />
                       </Form.Item>
                     </Col>
-                    <Col xs={12} md={6}>
+                    <Col xs={12} md={8}>
                       <Form.Item
                         name={[field.name, 'payAmount']}
                         label={t('प्रति क्लोजिंग')}
                         rules={[{ required: true, message: t('ज़रूरी') }]}
                       >
                         <InputNumber min={0} prefix="₹" style={{ width: '100%' }} />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={12} md={8}>
+                      {/* किश्त में नामांकन शुल्क — e.g. ₹2,100 of ₹11,000 now,
+                          the rest at the member's closing. */}
+                      <Form.Item
+                        name={[field.name, 'joinFeeAtJoin']}
+                        label={t('जुड़ते समय लें')}
+                        tooltip={t('खाली छोड़ें तो पूरा शुल्क जुड़ते समय लिया जाएगा')}
+                        dependencies={[['ageGroups', field.name, 'joinFee']]}
+                        rules={[
+                          ({ getFieldValue }) => ({
+                            validator: (_, v) => {
+                              const total = Number(getFieldValue(['ageGroups', field.name, 'joinFee'])) || 0;
+                              return !v || v <= total
+                                ? Promise.resolve()
+                                : Promise.reject(new Error(t('कुल शुल्क से ज़्यादा नहीं')));
+                            },
+                          }),
+                        ]}
+                        extra={(() => {
+                          const g = ageGroups?.[field.name];
+                          const total = Number(g?.joinFee) || 0;
+                          const now = Number(g?.joinFeeAtJoin) || 0;
+                          return now > 0 && now < total
+                            ? t('₹{n} बाकी — क्लोजिंग पर', { n: total - now })
+                            : undefined;
+                        })()}
+                      >
+                        <InputNumber min={0} prefix="₹" style={{ width: '100%' }} placeholder={t('पूरा')} />
                       </Form.Item>
                     </Col>
                   </Row>
@@ -273,6 +305,18 @@ export default function ProgramForm({ open, onClose, program }) {
             </>
           )}
         </Form.List>
+
+        {/* किश्त में नामांकन शुल्क — what happens to the rest at closing. */}
+        <Form.Item
+          name="joinFeeBalance"
+          label={t('बाकी नामांकन शुल्क क्लोजिंग पर')}
+          extra={t('जिन आयु समूहों में "जुड़ते समय लें" भरा है, उनके सदस्यों का बाकी शुल्क क्लोजिंग पर ऐसे लिया जाएगा। हर क्लोजिंग पर बदला भी जा सकता है।')}
+        >
+          <Radio.Group>
+            <Radio value="deduct">{t('सहयोग राशि में से काटें')}</Radio>
+            <Radio value="collect">{t('परिवार से अलग से वसूलें')}</Radio>
+          </Radio.Group>
+        </Form.Item>
 
         <Divider orientation="left" plain>{t('स्थान समूह')}</Divider>
 

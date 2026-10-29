@@ -14,6 +14,7 @@ import dayjs from 'dayjs';
 import { api, keys } from '../../lib/api.js';
 import { useActiveProgramId, setActiveProgramId } from '../../lib/activeProgram.js';
 import { matchAgeGroup, describeAgeGroups } from '../../lib/ageGroup.js';
+import { joinFeeSplit } from '../../lib/joinFees.js';
 import { resolveRegistrationConfig, previewRegistration } from '../../lib/registration.js';
 import { useMasters } from '../../lib/useMasters.js';
 import { MEMBER_STATUS } from '../../config/constants.js';
@@ -166,8 +167,12 @@ export default function MemberForm({ open, onClose, member }) {
     );
   }, [program, bobDate, joinDate]);
 
+  /** किश्त में नामांकन शुल्क — e.g. ₹2,100 now and ₹8,900 at closing. */
+  const feeSplit = useMemo(() => (matched ? joinFeeSplit(matched) : null), [matched]);
+
   /**
-   * The fee defaults to the whole amount, and the band decides what that is.
+   * The fee defaults to what the band takes at enrolment — the whole fee, or
+   * just the joining instalment (₹2,100 of ₹11,000) when the योजना splits it.
    *
    * Moving the birth date can change the band — and so the fee — while the box
    * is already ticked, so the default follows it. Only while the field is
@@ -177,8 +182,8 @@ export default function MemberForm({ open, onClose, member }) {
   useEffect(() => {
     if (!open || editing || !joinFeesDone || !matched) return;
     if (form.isFieldTouched('joinFeesPaidNow')) return;
-    form.setFieldValue('joinFeesPaidNow', matched.joinFee);
-  }, [open, editing, joinFeesDone, matched, form]);
+    form.setFieldValue('joinFeesPaidNow', feeSplit?.atJoin ?? matched.joinFee);
+  }, [open, editing, joinFeesDone, matched, feeSplit, form]);
 
   useEffect(() => {
     if (!open) return;
@@ -898,7 +903,9 @@ export default function MemberForm({ open, onClose, member }) {
                   extra={
                     matched
                       ? joinFeesPaidNow > 0 && joinFeesPaidNow < matched.joinFee
-                        ? t('₹{n} बाकी रहेगा', { n: matched.joinFee - joinFeesPaidNow })
+                        ? feeSplit?.instalment
+                          ? t('₹{n} बाकी रहेगा — क्लोजिंग पर लिया/काटा जाएगा', { n: matched.joinFee - joinFeesPaidNow })
+                          : t('₹{n} बाकी रहेगा', { n: matched.joinFee - joinFeesPaidNow })
                         : t('पूरा शुल्क ₹{n}', { n: matched.joinFee })
                       : undefined
                   }
@@ -934,6 +941,27 @@ export default function MemberForm({ open, onClose, member }) {
             </>
           )}
         </Row>
+
+        {/* किश्त में नामांकन शुल्क — for a member who is already enrolled. */}
+        {editing && fullRecord && Number(fullRecord.joinFees) > 0 && (
+          <Row gutter={16}>
+            <Col xs={24} md={8}>
+              <Form.Item
+                name="joinFeeAtJoin"
+                label={t('जुड़ते समय लें')}
+                tooltip={t('खाली छोड़ें तो पूरा शुल्क जुड़ते समय लिया जाएगा')}
+                rules={[{ type: 'number', max: Number(fullRecord.joinFees), message: t('कुल शुल्क से ज़्यादा नहीं') }]}
+                extra={t('कुल ₹{total} · जमा ₹{paid} · बाकी ₹{due}', {
+                  total: fullRecord.joinFees ?? 0,
+                  paid: fullRecord.joinFeesPaid ?? (fullRecord.joinFeesDone ? fullRecord.joinFees : 0),
+                  due: fullRecord.joinFeesDue ?? 0,
+                })}
+              >
+                <InputNumber min={0} max={Number(fullRecord.joinFees)} prefix="₹" style={{ width: '100%' }} placeholder={t('पूरा')} />
+              </Form.Item>
+            </Col>
+          </Row>
+        )}
 
         <Form.Item
           name="registrationNumber"
@@ -1033,6 +1061,15 @@ function RateCard({ matched, program, hasDates }) {
             value={`₹${matched.joinFee}`}
             valueStyle={{ fontSize: 20 }}
           />
+          {(() => {
+            // किश्त में नामांकन शुल्क
+            const split = joinFeeSplit(matched);
+            return split.instalment ? (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {t('जुड़ते समय ₹{now} · क्लोजिंग पर ₹{later}', { now: split.atJoin, later: split.later })}
+              </Text>
+            ) : null;
+          })()}
         </Col>
       </Row>
     </Card>

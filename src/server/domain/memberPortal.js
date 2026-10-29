@@ -6,6 +6,7 @@ import {
   memberTimeline, summariseTimeline, linkedEntries, maskAadhaar,
 } from './portalMath.js';
 import { forbidden, notFound } from '../errors.js';
+import { joinFeeSplit } from '../../lib/joinFees.js';
 import { LIMITS, MEMBER_STATUS, ROLE, paths } from '../../config/constants.js';
 
 /**
@@ -230,7 +231,16 @@ export async function buildMemberDetail(trustId, memberId, { nowMs = Date.now(),
       lastPaymentAt: member.lastPaymentAt ?? null,
       creditBalance: member.creditBalance ?? 0,
     },
-    joinFee: { total: joinFees, paid: joinFeesPaid, due: joinFeesDue, done: joinFeesDue <= 0 },
+    joinFee: {
+      total: joinFees, paid: joinFeesPaid, due: joinFeesDue, done: joinFeesDue <= 0,
+      /**
+       * किश्त में नामांकन शुल्क: what was meant to be taken at joining, and
+       * whether what is still due is the part settled at closing — so the
+       * app can say "₹8,900 क्लोजिंग पर" instead of a bare "बाकी".
+       */
+      atJoin: joinFeeSplit({ joinFee: joinFees, joinFeeAtJoin: member.joinFeeAtJoin }).atJoin,
+      atClosing: joinFeeSplit({ joinFee: joinFees, joinFeeAtJoin: member.joinFeeAtJoin }).instalment,
+    },
     summary,
     timeline,
     graceDays,

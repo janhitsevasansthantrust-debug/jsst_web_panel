@@ -131,6 +131,15 @@ export function ClosingCertificatePdf({ trust, program, closing, member }) {
               value={inr(p.oldPending)}
               note="काटी गई"
             />
+            {/* किश्त में नामांकन शुल्क — only printed when something was taken. */}
+            {Number(p.joinFeeDeducted) > 0 ? (
+              <MoneyRow
+                s={s}
+                label="बाकी नामांकन शुल्क"
+                value={inr(p.joinFeeDeducted)}
+                note={p.joinFeeReceiptNo ? `काटा गया · ${p.joinFeeReceiptNo}` : 'काटा गया'}
+              />
+            ) : null}
             <View style={s.netRow}>
               <Text style={s.netLabel}>दी जा रही नेट राशि</Text>
               <Text style={s.netValue}>{inr(net)}/-</Text>

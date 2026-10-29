@@ -105,6 +105,12 @@ export default function MemberAccount({ detail, urls }) {
           <div><div className="m-muted">{t('बाकी')}</div><b className={fee.due ? 'm-due' : ''}>{inr(fee.due)}</b></div>
         </div>
         <div className="m-progress"><span style={{ width: `${pct(fee.paid, fee.total || 1)}%` }} /></div>
+        {/* किश्त में नामांकन शुल्क */}
+        {fee.atClosing && fee.due > 0 ? (
+          <div className="m-muted" style={{ marginTop: 8 }}>
+            {t('जुड़ते समय {now} · बाकी {later} क्लोजिंग पर', { now: inr(fee.atJoin), later: inr(fee.due) })}
+          </div>
+        ) : null}
         {s.overdueCount > 0 ? (
           <div className="m-muted" style={{ marginTop: 8, color: 'var(--due)' }}>
             <ClockCircleOutlined /> {t('{n} क्लोजिंग की अंतिम तिथि निकल चुकी है — {amt}', { n: s.overdueCount, amt: inr(s.overdueAmount) })}

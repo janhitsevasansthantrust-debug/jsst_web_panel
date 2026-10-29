@@ -321,7 +321,19 @@ function ApproveModal({ request, onClose, onDone }) {
           </Form.Item>
           <Space.Compact style={{ width: '100%' }}>
             <Form.Item name="joinFeesPaidNow" label={t('नामांकन शुल्क प्राप्त (₹)')} style={{ flex: 1 }}
-              extra={t('कुल शुल्क {amt} · एजेंट ने बताया {got}', { amt: inr(request.joinFees), got: inr(request.joinFeesCollected) })}>
+              extra={
+                <>
+                  {t('कुल शुल्क {amt} · एजेंट ने बताया {got}', { amt: inr(request.joinFees), got: inr(request.joinFeesCollected) })}
+                  {request.joinFeeAtJoin > 0 && request.joinFeeAtJoin < request.joinFees ? (
+                    <div>
+                      {t('जुड़ते समय {now} · बाकी {later} क्लोजिंग पर', {
+                        now: inr(request.joinFeeAtJoin),
+                        later: inr(request.joinFees - request.joinFeeAtJoin),
+                      })}
+                    </div>
+                  ) : null}
+                </>
+              }>
               <InputNumber min={0} max={request.joinFees || undefined} style={{ width: '100%' }} />
             </Form.Item>
             <Form.Item name="joinFeesMethod" label={t('माध्यम')} style={{ width: 140 }}>

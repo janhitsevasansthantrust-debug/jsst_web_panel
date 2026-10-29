@@ -20,6 +20,7 @@ import DataGrid, { inr, money, dateCell } from '../../../components/ui/DataGrid.
 import { api, keys } from '../../../lib/api.js';
 import { useMasters } from '../../../lib/useMasters.js';
 import { useT } from '../../../i18n/index.js';
+import { closingNetAmount, suggestedClosingDeduction } from '../../../lib/joinFees.js';
 
 const { Text, Paragraph } = Typography;
 
@@ -493,6 +494,11 @@ function CreateClosingModal({ open, onClose }) {
     select: (d) => (d.batches ?? []).filter((b) => b.status !== 'issued'),
   });
 
+  /** किश्त में नामांकन शुल्क — say so before the member is closed. */
+  const chosenId = Form.useWatch('memberId', form);
+  const chosen = (members.data?.members ?? []).find((m) => m.id === chosenId);
+  const chosenFeeDue = Number(chosen?.joinFeesDue) || 0;
+
   const save = useMutation({
     mutationFn: (values) =>
       api.closings.create({
@@ -569,6 +575,16 @@ function CreateClosingModal({ open, onClose }) {
 
           />
         </Form.Item>
+
+        {chosenFeeDue > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={t('इस सदस्य का नामांकन शुल्क ₹{n} बाकी है', { n: chosenFeeDue })}
+            description={t('क्लोजिंग बनने के बाद "संपादित करें" में समापन पत्र भरते समय यह सहयोग राशि में से काटा जा सकता है, या भुगतान स्क्रीन से अलग से लिया जा सकता है।')}
+          />
+        )}
 
         <Row gutter={12}>
           <Col span={12}>
@@ -927,6 +943,21 @@ function ClosingDetailDrawer({ closing, onClose }) {
               {c.dateMs ? new Date(c.dateMs).toLocaleDateString('hi-IN') : '—'}
             </Descriptions.Item>
             <Descriptions.Item label={t('क्रम संख्या')}>{c.seq}</Descriptions.Item>
+            {c.memberJoinFee?.total > 0 && (
+              <Descriptions.Item label={t('नामांकन शुल्क')}>
+                {c.memberJoinFee.due > 0 ? (
+                  <Tag color="orange">{t('₹{n} बाकी', { n: c.memberJoinFee.due })}</Tag>
+                ) : (
+                  <Tag color="green">{t('पूरा जमा')}</Tag>
+                )}
+                {c.payout?.joinFeeDeducted > 0 && (
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    {t('₹{n} सहयोग राशि से काटा', { n: c.payout.joinFeeDeducted })}
+                    {c.payout.joinFeeReceiptNo ? ` · ${c.payout.joinFeeReceiptNo}` : ''}
+                  </Text>
+                )}
+              </Descriptions.Item>
+            )}
             <Descriptions.Item label={t('स्थिति')}>
               {c.status === 'reverted' ? <Tag color="red">{t('वापस लिया')}</Tag> : <Tag color="blue">{t('चालू')}</Tag>}
             </Descriptions.Item>
@@ -1109,13 +1140,17 @@ function EditClosingModal({ closing, id, open, onClose, onDone }) {
   const save = useMutation({
     mutationFn: (values) => {
       const { closingDate, memberContributed, membersCount, amountGiven,
-        paymentMode, oldPending, netAmount, ...rest } = values;
+        paymentMode, oldPending, joinFeeDeducted, netAmount, ...rest } = values;
 
       return api.closings.update(id, {
         ...rest,
         payout: {
           memberContributed, membersCount, amountGiven,
           paymentMode, oldPending, netAmount,
+          // Only sent when there is a joining fee to talk about — sending 0
+          // for every closing would be harmless, but it would also read as
+          // "somebody decided nothing should be deducted".
+          ...(feeTracked ? { joinFeeDeducted: joinFeeDeducted ?? 0 } : {}),
         },
       });
     },
@@ -1130,6 +1165,31 @@ function EditClosingModal({ closing, id, open, onClose, onDone }) {
   });
 
   const p = closing?.payout ?? {};
+
+  /**
+   * किश्त में नामांकन शुल्क.
+   *
+   * `memberJoinFee.due` is what is outstanding NOW — after any deduction this
+   * payout already made. So what can be deducted on this form is that, plus
+   * whatever this payout has already taken (it would be cancelled and
+   * re-written at the new figure).
+   */
+  const fee = closing?.memberJoinFee ?? null;
+  const alreadyDeducted = Number(p.joinFeeDeducted) || 0;
+  const deductible = (Number(fee?.due) || 0) + alreadyDeducted;
+  const feeTracked = deductible > 0;
+  const balanceMode = closing?.joinFeeBalance ?? 'deduct';
+  const seedGiven = p.amountGiven ?? closing?.paidAmount ?? 0;
+  const seedDeducted = p.joinFeeDeducted !== undefined
+    ? alreadyDeducted
+    : suggestedClosingDeduction({ joinFees: deductible, joinFeesPaid: 0 }, balanceMode);
+
+  /** The net figure follows the three it is made of, until somebody types it. */
+  const recomputeNet = (changed, all) => {
+    if (!('amountGiven' in changed || 'oldPending' in changed || 'joinFeeDeducted' in changed)) return;
+    if (form.isFieldTouched('netAmount') && !('joinFeeDeducted' in changed)) return;
+    form.setFieldValue('netAmount', closingNetAmount(all));
+  };
 
   return (
     <Modal
@@ -1147,6 +1207,7 @@ function EditClosingModal({ closing, id, open, onClose, onDone }) {
         form={form}
         layout="vertical"
         onFinish={save.mutate}
+        onValuesChange={recomputeNet}
         initialValues={{
           closingDate: closing?.dateMs ? dayjs(closing.dateMs) : null,
           notes: closing?.notes ?? '',
@@ -1155,12 +1216,34 @@ function EditClosingModal({ closing, id, open, onClose, onDone }) {
           // signed against.
           memberContributed: p.memberContributed ?? closing?.paidAmount ?? 0,
           membersCount: p.membersCount ?? closing?.paidCount ?? 0,
-          amountGiven: p.amountGiven ?? closing?.paidAmount ?? 0,
+          amountGiven: seedGiven,
           paymentMode: p.paymentMode ?? 'नकद',
           oldPending: p.oldPending ?? 0,
-          netAmount: p.netAmount ?? 0,
+          joinFeeDeducted: seedDeducted,
+          netAmount: p.netAmount ?? closingNetAmount({
+            amountGiven: seedGiven,
+            oldPending: p.oldPending ?? 0,
+            joinFeeDeducted: seedDeducted,
+          }),
         }}
       >
+        {feeTracked && (
+          <Alert
+            type={balanceMode === 'deduct' ? 'info' : 'warning'}
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={t('नामांकन शुल्क ₹{due} बाकी (कुल ₹{total}, जमा ₹{paid})', {
+              due: deductible,
+              total: fee?.total ?? 0,
+              paid: Math.max(0, (fee?.paid ?? 0) - alreadyDeducted),
+            })}
+            description={
+              balanceMode === 'deduct'
+                ? t('यह राशि सहयोग राशि में से काटी जाएगी और सहेजते ही इसकी "समायोजन" रसीद बनेगी। न काटना हो तो 0 कर दें।')
+                : t('यह योजना बाकी शुल्क परिवार से अलग से लेती है — भुगतान स्क्रीन से रसीद काटें। चाहें तो यहाँ राशि डालकर सहयोग राशि में से भी काट सकते हैं।')
+            }
+          />
+        )}
         <Row gutter={12}>
           <Col span={12}>
             <Form.Item
@@ -1203,6 +1286,18 @@ function EditClosingModal({ closing, id, open, onClose, onDone }) {
               <InputNumber min={0} prefix="₹" style={{ width: '100%' }} />
             </Form.Item>
           </Col>
+          {feeTracked && (
+            <Col span={12}>
+              <Form.Item
+                name="joinFeeDeducted"
+                label={t('बाकी नामांकन शुल्क (काटा गया)')}
+                extra={t('अधिकतम ₹{n}', { n: deductible })}
+                rules={[{ type: 'number', max: deductible, message: t('बाकी शुल्क से ज़्यादा नहीं') }]}
+              >
+                <InputNumber min={0} max={deductible} prefix="₹" style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          )}
           <Col span={24}>
             <Form.Item
               name="netAmount"

@@ -4,6 +4,7 @@ import { db, serverNow } from '../firebase/admin.js';
 import { badRequest, notFound } from '../errors.js';
 import { resolveRegistrationConfig } from '../../lib/registration.js';
 import { matchAgeGroup } from '../../lib/ageGroup.js';
+import { joinFeeSplit, joinFeeAtJoinForExisting, joinFeesState } from '../../lib/joinFees.js';
 import { LIMITS, paths } from '../../config/constants.js';
 
 /**
@@ -125,6 +126,9 @@ export async function createProgram(scope, input) {
     // trust's decision rather than ours.
     registration,
 
+    // किश्त में नामांकन शुल्क — what happens to the unpaid part at closing.
+    joinFeeBalance: input.joinFeeBalance ?? 'deduct',
+
     isSelected: Boolean(input.isSelected),
     memberCount: 0,
     inactivemembercount: 0,
@@ -203,6 +207,7 @@ export async function updateProgram(scope, programId, input) {
   };
 
   if (input.commissionPolicy) patch.commissionPolicy = input.commissionPolicy;
+  if (input.joinFeeBalance) patch.joinFeeBalance = input.joinFeeBalance;
 
   /**
    * How this योजना's registration numbers are made.
@@ -290,6 +295,13 @@ export function resolveMemberRates(program, { bobDateMs, joinDateMs, locationGro
     age: matched.ageYears,
     payAmount: Number(matched.payAmount) || LIMITS.DEFAULT_PAY_AMOUNT,
     joinFees: Number(matched.joinFee) || 0,
+    /**
+     * किश्त में नामांकन शुल्क: what the band takes at enrolment. Equal to
+     * `joinFees` when the band is not split. Stored on the member so the form,
+     * the receipt note and the member's own app can say "₹8,900 at closing"
+     * without re-reading the योजना.
+     */
+    joinFeeAtJoin: joinFeeSplit(matched).atJoin,
 
     locactionGroupId: locationGroup?.id ?? null,
     locationGroup: locationGroup?.location ?? '',
@@ -372,4 +384,90 @@ export async function getProgramRules(scope, programId) {
     ageGroups: program.ageGroups ?? [],
     locationGroups: program.locationGroups ?? [],
   };
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   किश्त में नामांकन शुल्क — applying a योजना's split to existing members
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Give members who joined before the split existed the same split.
+ *
+ * Writes ONE field per member, `joinFeeAtJoin`, from their age band. Nothing
+ * that records money changes: `joinFees`, `joinFeesPaid` and `joinFeesDue`
+ * stay exactly as they are, so no member suddenly owes more or less. What
+ * changes is what the split decides from here on —
+ *
+ *   • the screens say "₹8,900 बाकी — क्लोजिंग पर" instead of just "बाकी";
+ *   • the closing form offers to deduct what is outstanding from the payout;
+ *   • agent commission is earned only up to the at-join figure.
+ *
+ * Closed and left members are skipped: their fee is settled history.
+ *
+ * `dryRun` returns the same counts without writing, for the confirm dialog.
+ * A one-off admin operation, so it reads the योजना's members in one query —
+ * the same pattern `reindex` uses — and writes in batches of 400.
+ *
+ * @returns {{checked:number, toUpdate:number, updated:number,
+ *            withDue:number, dueTotal:number}}
+ */
+export async function applyJoinFeeSplitToMembers(scope, programId, { dryRun = false } = {}) {
+  const { trustId, uid } = scope;
+  const program = await getProgram(scope, programId);
+
+  const snap = await db
+    .collection(paths.members(trustId))
+    .where('programId', '==', programId)
+    .select('ageGroup', 'ageGroupRange', 'joinFees', 'joinFeesPaid', 'joinFeesDone',
+      'joinFeesDue', 'joinFeeAtJoin', 'status', 'delete_flag')
+    .get();
+
+  const changes = [];
+  let withDue = 0;
+  let dueTotal = 0;
+
+  for (const doc of snap.docs) {
+    const m = doc.data();
+    if (m.delete_flag || m.status === 'closed' || m.status === 'left') continue;
+    const next = joinFeeAtJoinForExisting(m, program.ageGroups);
+    if (next === null) continue;
+    changes.push({ ref: doc.ref, joinFeeAtJoin: next });
+    const { due } = joinFeesState(m);
+    if (due > 0) {
+      withDue += 1;
+      dueTotal += due;
+    }
+  }
+
+  const result = {
+    checked: snap.size,
+    toUpdate: changes.length,
+    updated: 0,
+    withDue,
+    dueTotal: Math.round(dueTotal * 100) / 100,
+  };
+  if (dryRun || !changes.length) return result;
+
+  for (let i = 0; i < changes.length; i += 400) {
+    const batch = db.batch();
+    for (const c of changes.slice(i, i + 400)) {
+      batch.update(c.ref, { joinFeeAtJoin: c.joinFeeAtJoin, updatedAt: serverNow(), updatedBy: uid });
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await batch.commit();
+    result.updated += Math.min(400, changes.length - i);
+  }
+
+  await db.collection(paths.auditLogs(trustId, programId)).add({
+    action: 'program.applyJoinFeeSplit',
+    programId,
+    updated: result.updated,
+    withDue: result.withDue,
+    dueTotal: result.dueTotal,
+    at: serverNow(),
+    atMs: Date.now(),
+    by: uid,
+  });
+
+  return result;
 }

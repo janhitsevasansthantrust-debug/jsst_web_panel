@@ -15,6 +15,7 @@ import { inr } from '../../../../../components/mobile/format.js';
 import { api, keys } from '../../../../../lib/api.js';
 import { useActiveProgramId } from '../../../../../lib/activeProgram.js';
 import { matchAgeGroup } from '../../../../../lib/ageGroup.js';
+import { joinFeeSplit } from '../../../../../lib/joinFees.js';
 import { useMasters } from '../../../../../lib/useMasters.js';
 import { useT } from '../../../../../i18n/index.js';
 
@@ -122,6 +123,8 @@ function NewRequest() {
   });
 
   const fee = Number(matched?.joinFee) || 0;
+  /** किश्त में नामांकन शुल्क — e.g. ₹2,100 now and ₹8,900 at closing. */
+  const split = matched ? joinFeeSplit(matched) : null;
 
   return (
     <AgentShell back="/agent/requests" title={fromId ? t('अनुरोध सुधारें') : t('नया सदस्य अनुरोध')}>
@@ -256,7 +259,11 @@ function NewRequest() {
               <Form.Item
                 name="joinFeesCollected"
                 label={t('शुल्क लिया (₹)')}
-                extra={fee ? t('अधिकतम {amt}', { amt: inr(fee) }) : undefined}
+                extra={
+                  split?.instalment
+                    ? t('जुड़ते समय {now} · बाकी {later} क्लोजिंग पर', { now: inr(split.atJoin), later: inr(split.later) })
+                    : fee ? t('अधिकतम {amt}', { amt: inr(fee) }) : undefined
+                }
                 rules={[{ type: 'number', min: 0, max: fee || 10_000_000, message: t('शुल्क से ज़्यादा नहीं') }]}
               >
                 <InputNumber size="large" min={0} style={{ width: '100%' }} inputMode="numeric" />

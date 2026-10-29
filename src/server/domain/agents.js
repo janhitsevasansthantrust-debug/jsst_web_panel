@@ -856,7 +856,10 @@ export async function searchClosableMembers(scope, term) {
     .where('programId', '==', scope.programId)
     .where('delete_flag', '==', false)
     .where('status', '==', MEMBER_STATUS.ACCEPTED)
-    .select('registrationNumber', 'displayName', 'fatherName', 'village', 'phone', 'payAmount', 'joinDateMs')
+    // The joining-fee fields let the closing form warn when a member being
+    // closed still owes part of their fee (किश्त में नामांकन शुल्क).
+    .select('registrationNumber', 'displayName', 'fatherName', 'village', 'phone', 'payAmount', 'joinDateMs',
+      'joinFees', 'joinFeesPaid', 'joinFeesDone', 'joinFeesDue')
     .limit(500)
     .get();
 

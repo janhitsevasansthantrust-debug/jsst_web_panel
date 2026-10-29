@@ -315,6 +315,7 @@ function ViewModal({ program, onClose }) {
             key: 'age',
             label: t('आयु समूह ({n})', { n: program.ageGroups?.length ?? 0 }),
             children: (
+              <>
               <Table
                 size="small"
                 rowKey={(r) => r.id ?? `${r.startAge}-${r.endAge}`}
@@ -331,6 +332,19 @@ function ViewModal({ program, onClose }) {
                     render: (v) => inr(v),
                   },
                   {
+                    // किश्त में नामांकन शुल्क
+                    title: t('जुड़ते समय / क्लोजिंग पर'),
+                    key: 'split',
+                    align: 'right',
+                    render: (_, r) => {
+                      const total = Number(r.joinFee) || 0;
+                      const now = Number(r.joinFeeAtJoin) || 0;
+                      return now > 0 && now < total
+                        ? `${inr(now)} / ${inr(total - now)}`
+                        : <Text type="secondary">{t('पूरा जुड़ते समय')}</Text>;
+                    },
+                  },
+                  {
                     title: t('प्रति क्लोजिंग'),
                     dataIndex: 'payAmount',
                     align: 'right',
@@ -338,6 +352,8 @@ function ViewModal({ program, onClose }) {
                   },
                 ]}
               />
+              <ApplyJoinFeeSplit program={program} />
+              </>
             ),
           },
           {
@@ -366,5 +382,94 @@ function ViewModal({ program, onClose }) {
         ]}
       />
     </Modal>
+  );
+}
+
+/**
+ * किश्त में नामांकन शुल्क — give members who joined before the split existed
+ * the same split.
+ *
+ * Only shown when some band actually splits its fee. Asks the server what it
+ * would change first (a dry run), says it in plain words, and writes only on
+ * confirm. Nothing that records money changes — see
+ * `programs.applyJoinFeeSplitToMembers`.
+ */
+function ApplyJoinFeeSplit({ program }) {
+  const t = useT();
+  const { message, modal } = App.useApp();
+  const queryClient = useQueryClient();
+  const [checking, setChecking] = useState(false);
+
+  const splits = (program.ageGroups ?? []).some((g) => {
+    const total = Number(g.joinFee) || 0;
+    const now = Number(g.joinFeeAtJoin) || 0;
+    return now > 0 && now < total;
+  });
+
+  const apply = useMutation({
+    mutationFn: () => api.programs.applyJoinFeeSplit(program.id),
+    onSuccess: (r) => {
+      message.success(t('{n} सदस्यों पर लागू हो गया', { n: r.updated }));
+      queryClient.invalidateQueries({ queryKey: ['members'] });
+    },
+    onError: (err) => message.error(err.message),
+  });
+
+  if (!splits) return null;
+
+  const start = async () => {
+    setChecking(true);
+    try {
+      const p = await api.programs.joinFeeSplitPreview(program.id);
+      if (!p.toUpdate) {
+        message.info(t('सभी मौजूदा सदस्यों पर यह पहले से लागू है'));
+        return;
+      }
+      modal.confirm({
+        title: t('मौजूदा सदस्यों पर लागू करें?'),
+        width: 520,
+        content: (
+          <Space direction="vertical" size={6}>
+            <Text>{t('{n} सदस्यों पर उनके आयु समूह का "जुड़ते समय लें" लागू होगा।', { n: p.toUpdate })}</Text>
+            {p.withDue > 0 && (
+              <Text>
+                {t('इनमें से {n} सदस्यों का कुल ₹{amt} नामांकन शुल्क बाकी है — वह क्लोजिंग पर लिया/काटा जा सकेगा।', {
+                  n: p.withDue, amt: p.dueTotal,
+                })}
+              </Text>
+            )}
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {t('किसी का शुल्क, जमा राशि या बकाया नहीं बदलेगा। आगे से एजेंट का कमीशन सिर्फ़ "जुड़ते समय" वाली राशि तक बनेगा। क्लोज़ और छोड़ चुके सदस्य शामिल नहीं हैं।')}
+            </Text>
+          </Space>
+        ),
+        okText: t('लागू करें'),
+        cancelText: t('रद्द'),
+        onOk: () => apply.mutateAsync(),
+      });
+    } catch (err) {
+      message.error(err.message);
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  return (
+    <Alert
+      type="info"
+      showIcon
+      style={{ marginTop: 12 }}
+      message={t('पहले से जुड़े सदस्य')}
+      description={
+        <Space direction="vertical" size={6}>
+          <Text style={{ fontSize: 13 }}>
+            {t('यह बँटवारा नए सदस्यों पर अपने-आप लगता है। पहले से जुड़े सदस्यों पर लगाने के लिए नीचे दबाएँ।')}
+          </Text>
+          <Button size="small" loading={checking || apply.isPending} onClick={start}>
+            {t('मौजूदा सदस्यों पर लागू करें')}
+          </Button>
+        </Space>
+      }
+    />
   );
 }

@@ -9,7 +9,7 @@ import {
   resolvePolicy, commissionForPayment, commissionForJoinFee, round2,
 } from './commission.js';
 import { badRequest, conflict, forbidden, notFound } from '../errors.js';
-import { joinFeesState, applyJoinFeePayment } from '../../lib/joinFees.js';
+import { joinFeesState, applyJoinFeePayment, commissionableJoinFee } from '../../lib/joinFees.js';
 import { allocateDeposit, allocateExplicit } from '../../lib/bulkAllocate.js';
 import { assertSameProgram } from './scope.js';
 import { selectClosings } from '../../lib/closingSelection.js';
@@ -337,9 +337,17 @@ async function postOneReceipt(scope, input, closings, uid, groupCodes = new Map(
         });
       }
 
-      if (joinFee > 0) {
+      /**
+       * किश्त में नामांकन शुल्क: only the part taken at enrolment (the योजना's
+       * "जुड़ते समय लें", e.g. ₹2,100 of ₹11,000) earns commission. The rest,
+       * settled later or out of the closing payout, earns nothing. Read from
+       * `member` as it was BEFORE this receipt — see `commissionableJoinFee`.
+       */
+      const joinFeeBase = joinFee > 0 ? commissionableJoinFee(member, joinFee) : 0;
+
+      if (joinFeeBase > 0) {
         const onJoinFee = commissionForJoinFee(policy, {
-          joinFeeAmount: joinFee,
+          joinFeeAmount: joinFeeBase,
           // Counted in members enrolled, not closings collected — a slab on
           // the joining stream is "your 50th member", not "your 50th receipt".
           runningCount: agent.memberCount ?? 0,
@@ -349,7 +357,7 @@ async function postOneReceipt(scope, input, closings, uid, groupCodes = new Map(
           entries.push({
             computed: onJoinFee,
             sourceType: 'joinFee',
-            baseAmount: joinFee,
+            baseAmount: joinFeeBase,
             units: 1,
           });
         }

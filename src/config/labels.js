@@ -33,6 +33,7 @@ export const PAYMENT_METHOD_LABEL = {
   upi: 'UPI',
   cheque: 'चेक',
   bank: 'बैंक',
+  adjustment: 'समायोजन',
 };
 
 export const paymentMethodLabel = (method) =>
