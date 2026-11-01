@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   useQuery, useMutation, useQueryClient, keepPreviousData,
 } from '@tanstack/react-query';
@@ -189,48 +189,142 @@ export default function MembersPage() {
 
   /**
    * Members ticked in the grid, for printing their प्रमाण पत्र / फॉर्म in one
-   * go. Kept in step by the grid's own selection event, which also fires
-   * when a new page or filter takes ticked rows off the screen — so nobody
-   * prints people they can no longer see.
+   * go — kept ACROSS pages. The grid only holds the page on screen, so the
+   * ticks live here (id → row) and are put back on the grid whenever a page
+   * of rows arrives. Tick 50 on page 1, go to page 2, tick 50 more: 100.
    */
-  const [selected, setSelected] = useState([]);
+  const [selectedMap, setSelectedMap] = useState(() => new Map());
+  const selectedRef = useRef(selectedMap);
+  selectedRef.current = selectedMap;
+  const gridApi = useRef(null);
+  const selected = useMemo(() => [...selectedMap.values()], [selectedMap]);
   const [printing, setPrinting] = useState(null);
 
-  async function printDocuments(type, list = selected) {
-    const ids = list.map((m) => m.id);
+  /** Only the operator's own ticks change the set — not the grid reloading. */
+  function onGridSelection(e) {
+    const src = String(e.source ?? '');
+    if (src.startsWith('api') || ['rowDataChanged', 'gridOptionsChanged', 'selectableChanged'].includes(src)) return;
+    setSelectedMap((prev) => {
+      const next = new Map(prev);
+      e.api.forEachNode((node) => { if (node.data) next.delete(node.data.id); });
+      for (const row of e.api.getSelectedRows()) next.set(row.id, row);
+      return next;
+    });
+  }
+
+  /** A new page of rows: tick again the ones chosen earlier. */
+  function restoreSelection(e) {
+    const nodes = [];
+    e.api.forEachNode((node) => {
+      if (node.data && selectedRef.current.has(node.data.id)) nodes.push(node);
+    });
+    if (nodes.length) e.api.setNodesSelected({ nodes, newValue: true, source: 'api' });
+  }
+
+  function clearSelection() {
+    setSelectedMap(new Map());
+    gridApi.current?.deselectAll('api');
+  }
+
+  /** One PDF holds at most this many members (the server's limit). */
+  const PER_PDF = 100;
+
+  /**
+   * Print the sheets for `ids`.
+   *
+   * Up to 100: one PDF, opened in a new tab. More: split into PDFs of 100,
+   * made one after another and saved as files (भाग 1, भाग 2 …) — a browser
+   * blocks a page that tries to open several tabs at once.
+   */
+  async function printIds(type, ids) {
     if (!ids.length) {
       message.info(t('पहले सदस्य चुनें'));
       return;
     }
-    if (ids.length > 100) {
-      message.warning(t('एक बार में ज़्यादा से ज़्यादा 100 सदस्य — कम चुनें'));
-      return;
-    }
-    // Opened first, synchronously, so the browser does not block it as a
-    // pop-up; filled in once the PDF arrives.
-    const tab = window.open('', '_blank');
+    const parts = [];
+    for (let i = 0; i < ids.length; i += PER_PDF) parts.push(ids.slice(i, i + PER_PDF));
+    const tab = parts.length === 1 ? window.open('', '_blank') : null;
+    const word = type === 'regform' ? 'sadasyata-form' : 'praman-patra';
+
     setPrinting(type);
+    let made = 0;
+    let skipped = 0;
+    const key = 'print-docs';
     try {
-      const response = await fetch(api.members.documentsUrl(ids, type), { credentials: 'same-origin' });
-      if (!response.ok) {
-        const detail = await response.json().catch(() => null);
-        throw new Error(detail?.error ?? t('PDF नहीं बनी ({code})', { code: response.status }));
+      for (let i = 0; i < parts.length; i += 1) {
+        if (parts.length > 1) {
+          message.loading({ key, duration: 0, content: t('PDF बन रही है — भाग {i} / {n}', { i: i + 1, n: parts.length }) });
+        }
+        // eslint-disable-next-line no-await-in-loop
+        const response = await fetch(api.members.documentsUrl(parts[i], type), { credentials: 'same-origin' });
+        if (!response.ok) {
+          // eslint-disable-next-line no-await-in-loop
+          const detail = await response.json().catch(() => null);
+          throw new Error(detail?.error ?? t('PDF नहीं बनी ({code})', { code: response.status }));
+        }
+        skipped += Number(response.headers.get('X-Skipped') ?? 0);
+        made += Number(response.headers.get('X-Total-Rows') ?? 0);
+        // eslint-disable-next-line no-await-in-loop
+        const url = URL.createObjectURL(await response.blob());
+        if (tab) {
+          tab.location.href = url;
+        } else if (parts.length === 1) {
+          window.open(url, '_blank');
+        } else {
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${word}-bhag-${i + 1}-of-${parts.length}.pdf`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        }
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
       }
-      const skipped = Number(response.headers.get('X-Skipped') ?? 0);
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      if (tab) tab.location.href = url;
-      else window.open(url, '_blank');
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      message.success(
-        skipped
-          ? t('{n} सदस्यों की PDF बनी · {s} छोड़े गए (दूसरी योजना / आपके सदस्य नहीं)', { n: ids.length - skipped, s: skipped })
-          : t('{n} सदस्यों की PDF बनी', { n: ids.length }),
-      );
+      message.success({
+        key,
+        content: skipped
+          ? t('{n} सदस्यों की PDF बनी · {s} छोड़े गए (दूसरी योजना / आपके सदस्य नहीं)', { n: made, s: skipped })
+          : parts.length > 1
+            ? t('{n} सदस्यों की PDF बनी — {p} फ़ाइलें डाउनलोड हुईं', { n: made, p: parts.length })
+            : t('{n} सदस्यों की PDF बनी', { n: made }),
+      });
     } catch (error) {
       tab?.close();
-      message.error(error.message);
+      message.error({ key, content: error.message });
     } finally {
+      setPrinting(null);
+    }
+  }
+
+  /** Ask first when it will be several files — 1,000 members is 10 PDFs. */
+  function printDocuments(type, list = selected) {
+    const ids = list.map((m) => m.id);
+    if (ids.length <= PER_PDF) return printIds(type, ids);
+    const files = Math.ceil(ids.length / PER_PDF);
+    modal.confirm({
+      title: t('{n} सदस्यों की PDF बनाएँ?', { n: ids.length }),
+      content: t('एक PDF में 100 सदस्य आते हैं, तो {p} फ़ाइलें एक-एक करके डाउनलोड होंगी। इसमें कुछ मिनट लग सकते हैं — पेज बंद न करें।', { p: files }),
+      okText: t('बनाएँ'),
+      cancelText: t('रद्द'),
+      onOk: () => { printIds(type, ids); },
+    });
+  }
+
+  /** Every member matching the current filters, not just this page. */
+  async function printFiltered(type) {
+    setPrinting(type);
+    try {
+      const { page: _p, limit: _l, ...rest } = params;
+      const response = await fetch(apiUrl(`/members/export${toQuery({ ...rest, format: 'ids' })}`), {
+        credentials: 'same-origin',
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(body?.error ?? t('डाउनलोड नहीं हुआ ({code})', { code: response.status }));
+      const list = (body?.data?.ids ?? body?.ids ?? []).map((id) => ({ id }));
+      setPrinting(null);
+      printDocuments(type, list);
+    } catch (error) {
+      message.error(error.message);
       setPrinting(null);
     }
   }
@@ -717,6 +811,27 @@ export default function MembersPage() {
                     label: t('चुने हुए सदस्यों के फॉर्म ({n})', { n: selected.length }),
                     onClick: () => printDocuments('regform'),
                   },
+                  {
+                    key: 'clear',
+                    disabled: !selected.length,
+                    label: t('चुनाव हटाएँ'),
+                    onClick: clearSelection,
+                  },
+                  { type: 'divider' },
+                  {
+                    key: 'cert-filtered',
+                    icon: <SafetyCertificateOutlined />,
+                    disabled: !totals.count,
+                    label: t('इस फ़िल्टर के सभी सदस्यों के प्रमाण पत्र ({n})', { n: num(totals.count ?? 0) }),
+                    onClick: () => printFiltered('certificate'),
+                  },
+                  {
+                    key: 'form-filtered',
+                    icon: <FileTextOutlined />,
+                    disabled: !totals.count,
+                    label: t('इस फ़िल्टर के सभी सदस्यों के फॉर्म ({n})', { n: num(totals.count ?? 0) }),
+                    onClick: () => printFiltered('regform'),
+                  },
                   { type: 'divider' },
                   {
                     key: 'cert-page',
@@ -822,7 +937,10 @@ export default function MembersPage() {
           headerCheckbox: true,
           enableClickSelection: false,
         }}
-        onSelectionChanged={(e) => setSelected(e.api.getSelectedRows())}
+        onGridReady={(e) => { gridApi.current = e.api; }}
+        onSelectionChanged={onGridSelection}
+        onRowDataUpdated={restoreSelection}
+        onFirstDataRendered={restoreSelection}
         emptyText={
           activeCount > 0 || search
             ? t('इन फ़िल्टरों पर कोई सदस्य नहीं मिला — कुछ फ़िल्टर हटाकर देखें')

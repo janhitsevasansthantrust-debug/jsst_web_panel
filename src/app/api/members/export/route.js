@@ -1,6 +1,6 @@
 import React from 'react';
 
-import { handler, readQuery } from '../../../../server/http.js';
+import { handler, readQuery, ok } from '../../../../server/http.js';
 import { requireScope } from '../../../../server/auth/session.js';
 import { listMembersForExport } from '../../../../server/domain/members.js';
 import { getTrust } from '../../../../server/domain/trust.js';
@@ -28,6 +28,16 @@ export const GET = handler(async (request) => {
     scope.role === ROLE.AGENT ? { ...params, agentId: [scope.agentId] } : params;
 
   const { members, total, truncated, totals } = await listMembersForExport(scope, filters);
+
+  /**
+   * Just the ids, in the list's order — for printing प्रमाण पत्र for the whole
+   * filtered set (the screen asks for them in PDFs of 100). Served from the
+   * same in-memory index as the list, so it costs no reads.
+   */
+  if (params.format === 'ids') {
+    return ok({ ids: members.map((m) => m.id), total, truncated });
+  }
+
   const stamp = fileStamp();
 
   if (params.format === 'csv') {

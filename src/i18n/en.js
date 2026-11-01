@@ -1057,4 +1057,11 @@ export default {
   "इस पेज के सभी फॉर्म ({n})": "All forms on this page ({n})",
   "प्रमाण पत्र ({n})": "Certificates ({n})",
   "प्रमाण पत्र": "Certificates",
+  "PDF बन रही है — भाग {i} / {n}": "Making PDF — part {i} / {n}",
+  "{n} सदस्यों की PDF बनी — {p} फ़ाइलें डाउनलोड हुईं": "PDF made for {n} members — {p} files downloaded",
+  "{n} सदस्यों की PDF बनाएँ?": "Make the PDF for {n} members?",
+  "एक PDF में 100 सदस्य आते हैं, तो {p} फ़ाइलें एक-एक करके डाउनलोड होंगी। इसमें कुछ मिनट लग सकते हैं — पेज बंद न करें।": "One PDF holds 100 members, so {p} files will download one by one. This can take a few minutes — keep the page open.",
+  "चुनाव हटाएँ": "Clear selection",
+  "इस फ़िल्टर के सभी सदस्यों के प्रमाण पत्र ({n})": "Certificates of all members in this filter ({n})",
+  "इस फ़िल्टर के सभी सदस्यों के फॉर्म ({n})": "Forms of all members in this filter ({n})",
 };

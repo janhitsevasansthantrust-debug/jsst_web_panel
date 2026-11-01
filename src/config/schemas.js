@@ -280,7 +280,8 @@ export const memberSummaryQuery = memberListQuery.extend({
 
 /** The list, as a file. `format` decides which one. */
 export const memberExportQuery = memberListQuery.extend({
-  format: z.enum(['csv', 'pdf']).default('csv'),
+  /** `ids`: just the matching members' ids, for printing their sheets. */
+  format: z.enum(['csv', 'pdf', 'ids']).default('csv'),
 });
 
 export const memberStatusChange = z.object({
