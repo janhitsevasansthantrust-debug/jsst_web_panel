@@ -26,7 +26,7 @@ import { closingWord } from './MemberCertificatePdf.js';
  * it was printing ₹5.00 on a ₹500 form. Amounts here are rupees throughout, as
  * they are stored.
  */
-export function MemberRegFormPdf({ trust, member, program }) {
+export function MemberRegFormPdf({ trust, member, program, pageOnly = false }) {
   const b = trust?.branding ?? {};
   const s = sheet();
 
@@ -35,6 +35,7 @@ export function MemberRegFormPdf({ trust, member, program }) {
 
   return (
     <FormPage
+      pageOnly={pageOnly}
       title={`${member.displayName} — सदस्यता फॉर्म`}
       author={b.nameHi || trust?.name || ''}
     >

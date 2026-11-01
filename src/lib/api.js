@@ -199,6 +199,9 @@ export const api = {
      */
     documentUrl: (id, type = 'certificate') =>
       apiUrl(`/members/${id}/document?type=${type}`),
+    /** Many members' sheets in one PDF, one page each (max 100). */
+    documentsUrl: (ids, type = 'certificate') =>
+      apiUrl(`/members/documents${qs({ type, ids: ids.join(',') })}`),
     setStatus: (id, body) => request(`/members/${id}/status`, { method: 'POST', body }),
     /**
      * Soft delete. The server refuses once the member has any payment history —

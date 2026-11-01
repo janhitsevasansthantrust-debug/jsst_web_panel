@@ -27,7 +27,7 @@ import { FormPage, FormCard, FormBody, FormRow, Field, NoteBox, SignRow } from '
  * fixed at the age they joined at. Recomputing it from today's age would
  * quietly reprice a certificate every time it was reprinted.
  */
-export function MemberCertificatePdf({ trust, member, program }) {
+export function MemberCertificatePdf({ trust, member, program, pageOnly = false }) {
   const b = trust?.branding ?? {};
   const s = sheet();
 
@@ -36,6 +36,7 @@ export function MemberCertificatePdf({ trust, member, program }) {
   return (
     <FormPage
       landscape
+      pageOnly={pageOnly}
       title={`${member.displayName} — सदस्यता प्रमाण पत्र`}
       author={b.nameHi || trust?.name || ''}
     >

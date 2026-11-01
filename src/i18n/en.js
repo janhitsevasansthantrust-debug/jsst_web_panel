@@ -1045,4 +1045,16 @@ export default {
   "यह बँटवारा नए सदस्यों पर अपने-आप लगता है। पहले से जुड़े सदस्यों पर लगाने के लिए नीचे दबाएँ।": "New members get this split automatically. Press below to apply it to members who joined earlier.",
   "मौजूदा सदस्यों पर लागू करें": "Apply to existing members",
   "कुल ₹{total} · जमा ₹{paid} · बाकी ₹{due}": "Total ₹{total} · paid ₹{paid} · due ₹{due}",
+  // एक साथ कई प्रमाण पत्र
+  "पहले सदस्य चुनें": "Select members first",
+  "एक बार में ज़्यादा से ज़्यादा 100 सदस्य — कम चुनें": "At most 100 members at a time — select fewer",
+  "PDF नहीं बनी ({code})": "Could not make the PDF ({code})",
+  "{n} सदस्यों की PDF बनी · {s} छोड़े गए (दूसरी योजना / आपके सदस्य नहीं)": "PDF made for {n} members · {s} skipped (other scheme / not your members)",
+  "{n} सदस्यों की PDF बनी": "PDF made for {n} members",
+  "चुने हुए सदस्यों के प्रमाण पत्र ({n})": "Certificates of selected members ({n})",
+  "चुने हुए सदस्यों के फॉर्म ({n})": "Forms of selected members ({n})",
+  "इस पेज के सभी प्रमाण पत्र ({n})": "All certificates on this page ({n})",
+  "इस पेज के सभी फॉर्म ({n})": "All forms on this page ({n})",
+  "प्रमाण पत्र ({n})": "Certificates ({n})",
+  "प्रमाण पत्र": "Certificates",
 };

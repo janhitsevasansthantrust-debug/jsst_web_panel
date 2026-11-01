@@ -75,7 +75,13 @@ export default function DataGrid({
         rowSelection={{ mode: 'singleRow', checkboxes: false, enableClickSelection: true }}
         quickFilterText={quickFilter}
         getRowId={getRowId}
-        onRowClicked={onRowClick ? (e) => onRowClick(e.data) : undefined}
+        onRowClicked={onRowClick
+          ? (e) => {
+              // Ticking a selection checkbox is not "open this row".
+              if (e.event?.target?.closest?.('.ag-selection-checkbox, .ag-checkbox-input-wrapper')) return;
+              onRowClick(e.data);
+            }
+          : undefined}
         overlayNoRowsTemplate={`<span style="color:#888">${emptyText}</span>`}
         suppressCellFocus
         {...rest}

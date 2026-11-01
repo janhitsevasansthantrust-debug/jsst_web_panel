@@ -188,6 +188,54 @@ export default function MembersPage() {
   const [exporting, setExporting] = useState(null);
 
   /**
+   * Members ticked in the grid, for printing their प्रमाण पत्र / फॉर्म in one
+   * go. Kept in step by the grid's own selection event, which also fires
+   * when a new page or filter takes ticked rows off the screen — so nobody
+   * prints people they can no longer see.
+   */
+  const [selected, setSelected] = useState([]);
+  const [printing, setPrinting] = useState(null);
+
+  async function printDocuments(type, list = selected) {
+    const ids = list.map((m) => m.id);
+    if (!ids.length) {
+      message.info(t('पहले सदस्य चुनें'));
+      return;
+    }
+    if (ids.length > 100) {
+      message.warning(t('एक बार में ज़्यादा से ज़्यादा 100 सदस्य — कम चुनें'));
+      return;
+    }
+    // Opened first, synchronously, so the browser does not block it as a
+    // pop-up; filled in once the PDF arrives.
+    const tab = window.open('', '_blank');
+    setPrinting(type);
+    try {
+      const response = await fetch(api.members.documentsUrl(ids, type), { credentials: 'same-origin' });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => null);
+        throw new Error(detail?.error ?? t('PDF नहीं बनी ({code})', { code: response.status }));
+      }
+      const skipped = Number(response.headers.get('X-Skipped') ?? 0);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      if (tab) tab.location.href = url;
+      else window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      message.success(
+        skipped
+          ? t('{n} सदस्यों की PDF बनी · {s} छोड़े गए (दूसरी योजना / आपके सदस्य नहीं)', { n: ids.length - skipped, s: skipped })
+          : t('{n} सदस्यों की PDF बनी', { n: ids.length }),
+      );
+    } catch (error) {
+      tab?.close();
+      message.error(error.message);
+    } finally {
+      setPrinting(null);
+    }
+  }
+
+  /**
    * Download the CURRENT filtered list — every row of it, not the page shown.
    *
    * A plain <a href> would not carry the filters and would open the file in a
@@ -648,7 +696,57 @@ export default function MembersPage() {
             simply looked like there was no export at all. An action people go
             looking for needs a fixed place, not whatever space is left over.
           */}
-          <div style={{ marginInlineStart: 'auto' }}>
+          <div style={{ marginInlineStart: 'auto', display: 'flex', gap: 8 }}>
+            {/* प्रमाण पत्र / फॉर्म for many members at once — one PDF, one
+                page each. Ticked rows, or the whole page when none are. */}
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  {
+                    key: 'cert-selected',
+                    icon: <SafetyCertificateOutlined />,
+                    disabled: !selected.length,
+                    label: t('चुने हुए सदस्यों के प्रमाण पत्र ({n})', { n: selected.length }),
+                    onClick: () => printDocuments('certificate'),
+                  },
+                  {
+                    key: 'form-selected',
+                    icon: <FileTextOutlined />,
+                    disabled: !selected.length,
+                    label: t('चुने हुए सदस्यों के फॉर्म ({n})', { n: selected.length }),
+                    onClick: () => printDocuments('regform'),
+                  },
+                  { type: 'divider' },
+                  {
+                    key: 'cert-page',
+                    icon: <SafetyCertificateOutlined />,
+                    disabled: !rows.length,
+                    label: t('इस पेज के सभी प्रमाण पत्र ({n})', { n: rows.length }),
+                    onClick: () => printDocuments('certificate', rows),
+                  },
+                  {
+                    key: 'form-page',
+                    icon: <FileTextOutlined />,
+                    disabled: !rows.length,
+                    label: t('इस पेज के सभी फॉर्म ({n})', { n: rows.length }),
+                    onClick: () => printDocuments('regform', rows),
+                  },
+                ],
+              }}
+            >
+              <Button
+                size="large"
+                icon={<SafetyCertificateOutlined />}
+                loading={Boolean(printing)}
+                type={selected.length ? 'primary' : 'default'}
+              >
+                {selected.length
+                  ? t('प्रमाण पत्र ({n})', { n: selected.length })
+                  : t('प्रमाण पत्र')}
+              </Button>
+            </Dropdown>
+
             <Dropdown
               trigger={['click']}
               menu={{
@@ -717,6 +815,14 @@ export default function MembersPage() {
         rowHeight={52}
         getRowId={(p) => p.data.id}
         onRowClick={(row) => setDetailsId(row.id)}
+        // Ticking a box selects; clicking the row still opens the member.
+        rowSelection={{
+          mode: 'multiRow',
+          checkboxes: true,
+          headerCheckbox: true,
+          enableClickSelection: false,
+        }}
+        onSelectionChanged={(e) => setSelected(e.api.getSelectedRows())}
         emptyText={
           activeCount > 0 || search
             ? t('इन फ़िल्टरों पर कोई सदस्य नहीं मिला — कुछ फ़िल्टर हटाकर देखें')

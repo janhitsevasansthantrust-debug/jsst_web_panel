@@ -190,20 +190,26 @@ export function SignRow({ trust, member }) {
   );
 }
 
-/** Convenience: a one-page A5 document wrapper with the right font. */
-export function FormPage({ landscape, children, ...rest }) {
+/**
+ * Convenience: a one-page A5 document wrapper with the right font.
+ *
+ * `pageOnly` renders just the page, without its own <Document>: set by a PDF
+ * that holds MANY sheets (see `MemberDocumentsPdf`), whose single <Document>
+ * holds them all. A prop rather than React context on purpose — route handlers
+ * run on React's server build, which has no `createContext`.
+ */
+export function FormPage({ landscape, children, pageOnly = false, ...rest }) {
   const s = pageStyles();
-  return (
-    <Document {...rest}>
-      <Page
-        size={landscape ? A5_LANDSCAPE : 'A5'}
-        orientation="portrait"
-        style={s.page}
-      >
-        {children}
-      </Page>
-    </Document>
+  const page = (
+    <Page
+      size={landscape ? A5_LANDSCAPE : 'A5'}
+      orientation="portrait"
+      style={s.page}
+    >
+      {children}
+    </Page>
   );
+  return pageOnly ? page : <Document {...rest}>{page}</Document>;
 }
 
 function pageStyles() {
