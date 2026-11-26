@@ -1,12 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { Layout, Menu, Avatar, Dropdown, Typography, Grid, Button, Space, Tag, Drawer, Badge } from 'antd';
 import {
-  DashboardOutlined, TeamOutlined, HeartOutlined, WalletOutlined, GroupOutlined,
+  CloseOutlined, DashboardOutlined, TeamOutlined, HeartOutlined, WalletOutlined, GroupOutlined,
   UserSwitchOutlined, PercentageOutlined, ProjectOutlined, FileTextOutlined,
   SettingOutlined, LogoutOutlined, MenuOutlined, DatabaseOutlined, UserAddOutlined,
 } from '@ant-design/icons';
@@ -57,10 +57,27 @@ export default function AppShell({ user, children }) {
   const router = useRouter();
   const pathname = usePathname();
   const screens = Grid.useBreakpoint();
-  const isMobile = !screens.lg;
+  // `useBreakpoint` is `{}` on the first render. Treating "not measured yet"
+  // as a phone flashed the hamburger header on every desktop page load.
+  const measured = screens.lg !== undefined;
+  const isMobile = measured && !screens.lg;
 
   const [collapsed, setCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // A small laptop (992–1199px) gets the icon rail by default: a 228px
+  // sidebar there left the members grid too narrow to read. The operator can
+  // still expand it; this only sets the starting state when the width changes.
+  useEffect(() => {
+    if (!measured) return;
+    setCollapsed(!screens.xl);
+  }, [measured, screens.xl]);
+
+  // Leaving phone width with the drawer open would leave it open over the
+  // desktop layout.
+  useEffect(() => {
+    if (!isMobile) setDrawerOpen(false);
+  }, [isMobile]);
   const t = useT();
 
   const branding = useQuery({
@@ -114,7 +131,7 @@ export default function AppShell({ user, children }) {
   }
 
   const brandBlock = (
-    <div className="app-brand">
+    <div className="app-brand" title={trustName}>
       {b?.logoURL ? (
         <img src={b.logoURL} alt="" className="app-brand__mark" />
       ) : (
@@ -122,6 +139,15 @@ export default function AppShell({ user, children }) {
       )}
       {!(collapsed && !isMobile) && (
         <div className="app-brand__name">{trustName}</div>
+      )}
+      {isMobile && (
+        <Button
+          type="text"
+          className="app-brand__close"
+          icon={<CloseOutlined />}
+          aria-label={t('बंद करें')}
+          onClick={() => setDrawerOpen(false)}
+        />
       )}
     </div>
   );
@@ -158,8 +184,9 @@ export default function AppShell({ user, children }) {
       {/* On a phone the same navigation, as a drawer. */}
       <Drawer
         placement="left"
-        width={252}
-        open={drawerOpen}
+        rootClassName="app-nav-drawer"
+        width="min(280px, 86vw)"
+        open={drawerOpen && isMobile}
         onClose={() => setDrawerOpen(false)}
         closable={false}
         styles={{
@@ -176,7 +203,7 @@ export default function AppShell({ user, children }) {
           className="app-header"
           style={{
             background: 'var(--surface)',
-            padding: '0 20px',
+            padding: isMobile ? '0 10px' : '0 20px',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -187,7 +214,7 @@ export default function AppShell({ user, children }) {
             zIndex: 20,
           }}
         >
-          <Space size={10}>
+          <Space size={isMobile ? 6 : 10} className="app-header__left">
             {isMobile && (
               <Button
                 type="text"

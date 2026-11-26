@@ -69,6 +69,7 @@ export function FormCard({ trust, program, title, serial, children, landscape = 
           <View style={s.middle}>
             <Text style={s.name}>{b.nameHi || trust?.name || 'ट्रस्ट'}</Text>
             {b.cityState ? <Text style={s.cityState}>{b.cityState}</Text> : null}
+            {b.tagline ? <Text style={s.address}>{b.tagline}</Text> : null}
             {b.registrationNo ? (
               <Text style={s.reg}>पंजी. क्र. (CIN): {b.registrationNo}</Text>
             ) : null}
@@ -166,15 +167,19 @@ export function SignRow({ trust, member }) {
   const b = trust?.branding ?? {};
   const s = signStyles();
 
-  const agent = [member?.agentName || member?.addedByName, member?.agentPhone]
-    .filter(Boolean)
-    .join(' ');
+  const { name: agentName, phone } = agentOf(member);
+  // Settings → "प्रमाण पत्र पर एजेंट का मोबाइल दिखाएँ". On unless switched off.
+  const agentPhone = b.showAgentPhone === false ? '' : phone;
 
   return (
     <View style={s.row}>
       <View style={s.box}>
-        <Text style={s.value}>{agent || 'सीधे जोड़ा गया'}</Text>
-        <Text style={s.label}>कार्यकर्ता</Text>
+        <Text style={s.value}>
+          {agentName
+            ? `${agentName}${agentPhone ? `  (${agentPhone})` : ''}`
+            : 'ऑफिस द्वारा'}
+        </Text>
+        <Text style={s.label}>{agentLabelOf(trust)}</Text>
       </View>
 
       {b.sealURL ? <Image src={b.sealURL} style={s.seal} /> : null}
@@ -188,6 +193,72 @@ export function SignRow({ trust, member }) {
       </View>
     </View>
   );
+}
+
+/**
+ * The trust's own word for an agent (Settings → एजेंट के लिए शब्द).
+ */
+export function agentLabelOf(trust) {
+  return String(trust?.branding?.agentLabel ?? '').trim() || 'एजेंट';
+}
+
+/**
+ * Who enrolled the member, as it should be printed.
+ *
+ * The live agent record (`member.agent`, read by the route) wins over the copy
+ * on the member, so a renamed agent or a changed phone number shows on the
+ * next reprint. `addedByName` is NOT used as a fallback: for an office entry
+ * it holds the literal "Admin", which used to print as the agent's name.
+ */
+export function agentOf(member) {
+  const live = member?.agent ?? {};
+  const byAgent = Boolean(member?.agentId) || member?.addedBy === 'agent';
+  const name = String(live.displayName || member?.agentName || (byAgent ? member?.addedByName : '') || '').trim();
+  const phone = String(live.phone || member?.agentPhone || '').trim();
+  return { name: name === 'Admin' ? '' : name, phone, village: live.village || live.city || '' };
+}
+
+/**
+ * The trust's own particulars that the masthead has no room for — PAN,
+ * registration date, e-mail, website, contact person — on one small line.
+ *
+ * Every value comes from settings; a field the trust left blank simply does not
+ * appear, rather than printing an empty "PAN: —".
+ */
+export function TrustInfoStrip({ trust, extra = [] }) {
+  const b = trust?.branding ?? {};
+  const parts = [
+    b.regDate ? `पंजी. दिनांक: ${b.regDate}` : '',
+    b.panNo ? `PAN: ${b.panNo}` : '',
+    b.email ? `ईमेल: ${b.email}` : '',
+    b.website ? `वेबसाइट: ${b.website}` : '',
+    b.contactPerson ? `संपर्क: ${b.contactPerson}` : '',
+    ...extra,
+  ].filter(Boolean);
+
+  if (!parts.length && !b.footerNote) return null;
+  const s = stripStyles(b.theme?.primary || DEFAULT_PRIMARY);
+
+  return (
+    <View style={s.box}>
+      {parts.length > 0 ? <Text style={s.line}>{parts.join('   |   ')}</Text> : null}
+      {b.footerNote ? <Text style={s.note}>{b.footerNote}</Text> : null}
+    </View>
+  );
+}
+
+function stripStyles(primary) {
+  return StyleSheet.create({
+    box: {
+      marginTop: 4,
+      paddingTop: 2,
+      borderTopWidth: 0.6,
+      borderTopColor: primary,
+      alignItems: 'center',
+    },
+    line: { fontSize: 6.8, color: '#333', textAlign: 'center' },
+    note: { fontSize: 6.5, color: '#555', textAlign: 'center', marginTop: 1 },
+  });
 }
 
 /**

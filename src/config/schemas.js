@@ -938,6 +938,10 @@ export const trustUpdate = z.object({
       signatoryName: patchText(120),
       signatoryDesignation: patchText(80),
       presidentName: patchText(120),
+      /** What the certificate calls the person who enrolled a member. */
+      agentLabel: patchText(40),
+      /** Print the agent's phone next to their name on the certificate / form. */
+      showAgentPhone: z.boolean().optional(),
 
       /** Invocations above the name — `|| श्री गणेशाय नमः ||`. */
       topLines: z.array(z.string().trim().max(200)).max(6).optional(),

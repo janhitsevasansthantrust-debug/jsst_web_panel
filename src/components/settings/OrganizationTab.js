@@ -304,6 +304,31 @@ export default function OrganizationTab() {
               ]} />
             </Form.Item>
           </Col>
+          <Col xs={24} md={12}>
+            <Form.Item
+              name="agentLabel"
+              label={t('एजेंट के लिए शब्द')}
+              extra={t('प्रमाण पत्र, सदस्यता फॉर्म और क्लोजिंग प्रमाण पत्र पर यही शब्द छपेगा — जैसे एजेंट, प्रतिनिधि, सहयोगी। खाली छोड़ें तो “एजेंट” छपेगा।')}
+            >
+              <AutoComplete
+                allowClear
+                maxLength={40}
+                placeholder={t('एजेंट')}
+                options={['एजेंट', 'प्रतिनिधि', 'सहयोगी', 'कार्यकर्ता', 'सेवक', 'Agent']
+                  .map((v) => ({ value: v }))}
+              />
+            </Form.Item>
+          </Col>
+          <Col xs={24} md={12}>
+            <Form.Item
+              name="showAgentPhone"
+              label={t('प्रमाण पत्र पर एजेंट का मोबाइल दिखाएँ')}
+              valuePropName="checked"
+              extra={t('बंद करने पर सिर्फ़ एजेंट का नाम छपेगा, मोबाइल नंबर नहीं।')}
+            >
+              <Switch />
+            </Form.Item>
+          </Col>
           <Col xs={12} md={6}>
             <Form.Item name="primary" label={t('मुख्य रंग')}>
               <ColorPicker showText format="hex" />

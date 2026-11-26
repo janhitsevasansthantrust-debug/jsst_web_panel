@@ -77,6 +77,14 @@ const DEFAULT_BRANDING = {
   signatoryDesignation: 'अध्यक्ष',
   /** The president's name, when it differs from whoever signs. */
   presidentName: '',
+  /**
+   * The word printed for the person who enrolled a member — एजेंट,
+   * कार्यकर्ता, प्रतिनिधि … — on the certificate, the form and the closing
+   * certificate. Each trust has its own word for it.
+   */
+  agentLabel: 'एजेंट',
+  /** Print the agent's phone beside their name on the certificate and form. */
+  showAgentPhone: true,
 
   /**
    * Invocations printed ABOVE the trust's name — `|| श्री गणेशाय नमः ||` and

@@ -50,12 +50,12 @@ export const GET = handler(async (request, context) => {
     throw forbidden('यह सदस्य आपकी सूची में नहीं है');
   }
 
-  const [trust, program, agentPhone] = await Promise.all([
+  const [trust, program, agent] = await Promise.all([
     getTrust(scope),
     // The member may have been enrolled under a योजना that has since been
     // removed; the sheet should still print, just without the scheme line.
     getProgram(scope, member.programId).catch(() => null),
-    agentPhoneFor(scope.trustId, member.agentId),
+    agentFor(scope.trustId, member.agentId),
   ]);
 
   const [{ renderPdf }, mod] = await Promise.all([
@@ -67,7 +67,7 @@ export const GET = handler(async (request, context) => {
     React.createElement(doc.pick(mod), {
       trust,
       program,
-      member: { ...member, agentPhone },
+      member: { ...member, agent, agentPhone: agent?.phone ?? '' },
     }),
   );
 
@@ -84,19 +84,26 @@ export const GET = handler(async (request, context) => {
 });
 
 /**
- * The enrolling agent's phone, for the signature line.
+ * The enrolling agent — name, phone, village — for the certificate.
  *
  * Read live rather than copied onto the member at enrolment: an agent who
- * changes their number should not have to have every one of their members
- * rewritten for the next reprint to be reachable. A missing agent is not an
- * error — plenty of members are added directly by the office.
+ * changes their number or name should not have to have every one of their
+ * members rewritten for the next reprint to be right. A missing agent is not
+ * an error — plenty of members are added directly by the office.
  */
-async function agentPhoneFor(trustId, agentId) {
-  if (!agentId) return '';
+async function agentFor(trustId, agentId) {
+  if (!agentId) return null;
   try {
     const snap = await db.doc(paths.agent(trustId, agentId)).get();
-    return snap.exists ? (snap.data().phone ?? '') : '';
+    if (!snap.exists) return null;
+    const a = snap.data();
+    return {
+      displayName: a.displayName ?? '',
+      phone: a.phone ?? '',
+      village: a.village ?? '',
+      city: a.city ?? '',
+    };
   } catch {
-    return '';
+    return null;
   }
 }

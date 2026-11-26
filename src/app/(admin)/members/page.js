@@ -91,6 +91,8 @@ export default function MembersPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [detailsId, setDetailsId] = useState(null);
+  /** The clicked row, shown in the drawer while the full record loads. */
+  const [detailsRow, setDetailsRow] = useState(null);
 
   const { modal, message } = App.useApp();
   const queryClient = useQueryClient();
@@ -451,7 +453,7 @@ export default function MembersPage() {
       <Space size={4} onClick={(e) => e.stopPropagation()}>
         <Tooltip title={t('पूरा विवरण')}>
           <Button size="small" type="primary" icon={<EyeOutlined />}
-            onClick={() => setDetailsId(member.id)} />
+            onClick={() => { setDetailsRow(member); setDetailsId(member.id); }} />
         </Tooltip>
         <Tooltip title={t('संपादित करें')}>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(member)} />
@@ -929,8 +931,9 @@ export default function MembersPage() {
         loading={query.isLoading}
         rowHeight={52}
         getRowId={(p) => p.data.id}
-        onRowClick={(row) => setDetailsId(row.id)}
-        // Ticking a box selects; clicking the row still opens the member.
+        // Clicking a row does nothing on purpose — details open only from the
+        // 👁 button, so a stray click while scanning the list opens nothing.
+        // Ticking a box still selects.
         rowSelection={{
           mode: 'multiRow',
           checkboxes: true,
@@ -990,6 +993,7 @@ export default function MembersPage() {
 
       <MemberDetailsDrawer
         memberId={detailsId}
+        initialMember={detailsRow}
         open={Boolean(detailsId)}
         onClose={() => setDetailsId(null)}
         onEdit={(member) => {

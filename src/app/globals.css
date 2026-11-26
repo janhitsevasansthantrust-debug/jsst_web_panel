@@ -188,6 +188,62 @@ body {
   box-shadow: var(--shadow-sm);
   backdrop-filter: blur(8px);
 }
+/* The योजना and language pickers must shrink on a phone, not push the
+   user menu off the right edge. */
+.app-header__left { min-width: 0; flex: 1 1 auto; overflow: hidden; }
+.app-header__left > .ant-space-item { min-width: 0; }
+
+/* Sidebar: brand fixed on top, menu scrolls beneath it. Twelve items on a
+   short laptop screen used to run under the collapse button and the last
+   ones (मास्टर, सेटिंग्स) could not be reached at all. */
+.app-sider .ant-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.app-sider .app-brand { flex: 0 0 auto; }
+.app-sider .app-nav,
+.app-nav-drawer .app-nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: 12px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+/* Collapsed rail: the logo centred, not hanging off the left edge. */
+.app-sider.ant-layout-sider-collapsed .app-brand {
+  justify-content: center;
+  padding: 0;
+}
+.app-sider.ant-layout-sider-collapsed .app-nav .ant-menu-item {
+  margin-inline: 6px;
+}
+/* The collapse button in the sidebar's own colours, not antd's navy. */
+.app-sider .ant-layout-sider-trigger {
+  background: rgba(0, 0, 0, 0.28);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Phone drawer: edge to edge in the sidebar colour. The general phone rule
+   further down gives every drawer body 14px padding, which framed the dark
+   menu in a light border. */
+.app-nav-drawer .ant-drawer-content,
+.app-nav-drawer .ant-drawer-body {
+  background: linear-gradient(180deg, var(--sider-bg) 0%, var(--sider-bg-end) 100%) !important;
+}
+.app-nav-drawer .ant-drawer-body {
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.app-nav-drawer .app-brand { flex: 0 0 auto; padding-inline-end: 6px; }
+.app-nav-drawer .app-brand__name { flex: 1; min-width: 0; }
+.app-brand__close.ant-btn { color: rgba(255, 255, 255, 0.75); flex: 0 0 auto; }
+.app-brand__close.ant-btn:hover { color: #fff !important; background: rgba(255, 255, 255, 0.1) !important; }
+.app-nav-drawer .app-nav .ant-menu-item { height: 44px; line-height: 44px; }
 
 /* ── Cards ───────────────────────────────────────────────────────────────── */
 
@@ -314,3 +370,6 @@ body {
   .ant-drawer .ant-drawer-body { padding: 14px; }
   .ant-modal { max-width: calc(100vw - 16px); }
 }
+
+/* Rows that open something on click should look like it. */
+.grid-row-clickable { cursor: pointer; }

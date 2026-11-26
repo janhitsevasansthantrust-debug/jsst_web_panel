@@ -3,7 +3,7 @@ import 'server-only';
 import React from 'react';
 import { Text, View, Image, StyleSheet } from '@react-pdf/renderer';
 
-import { inr, hiDate } from './branding.js';
+import { inr, docDate } from './branding.js';
 import { FormPage, FormCard, FormBody, FormRow, Field, NoteBox, SignRow } from './formLayout.js';
 import { closingWord } from './MemberCertificatePdf.js';
 
@@ -55,7 +55,7 @@ export function MemberRegFormPdf({ trust, member, program, pageOnly = false }) {
             <View style={s.splitFields}>
               <FormRow>
                 <Field label="सदस्यता क्रमांक:" value={member.registrationNumber} />
-                <Field label="दिनांक:" value={member.joinDate || hiDate(member.joinDateMs)} />
+                <Field label="दिनांक:" value={docDate(member.joinDateMs, member.joinDate)} />
               </FormRow>
               <FormRow>
                 <Field label="नाम:" value={member.displayName} />
@@ -68,12 +68,12 @@ export function MemberRegFormPdf({ trust, member, program, pageOnly = false }) {
                 <Field label="जाति:" value={member.jati} />
               </FormRow>
               <FormRow>
-                <Field label="जन्म दिनांक:" value={member.bobDate || hiDate(member.bobDateMs)} />
+                <Field label="जन्म दिनांक:" value={docDate(member.bobDateMs, member.bobDate)} />
                 <Field flex={0.7} label="लिंग:" value={member.gender} />
               </FormRow>
               <FormRow>
-                <Field label="मोबाईल:" value={member.phone} />
-                <Field label="अन्य मोबाईल:" value={member.phoneAlt} />
+                <Field label="मोबाइल नं.:" value={member.phone} />
+                <Field label="अन्य मोबाइल:" value={member.phoneAlt} />
               </FormRow>
             </View>
 

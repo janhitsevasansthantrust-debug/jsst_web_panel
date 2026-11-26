@@ -75,10 +75,20 @@ export default function DataGrid({
         rowSelection={{ mode: 'singleRow', checkboxes: false, enableClickSelection: true }}
         quickFilterText={quickFilter}
         getRowId={getRowId}
+        rowClass={onRowClick ? 'grid-row-clickable' : undefined}
         onRowClicked={onRowClick
           ? (e) => {
-              // Ticking a selection checkbox is not "open this row".
-              if (e.event?.target?.closest?.('.ag-selection-checkbox, .ag-checkbox-input-wrapper')) return;
+              // Ticking a selection checkbox, or pressing a button / link /
+              // menu inside the row, is not "open this row". A React
+              // `stopPropagation` in a cell does NOT stop this: AG Grid
+              // listens on the row's real DOM node, so the Edit button used
+              // to open the edit form AND the details drawer together.
+              const target = e.event?.target;
+              if (target?.closest?.(
+                '.ag-selection-checkbox, .ag-checkbox-input-wrapper, button, a, input, select, textarea, '
+                + '[role="button"], [role="menuitem"], .ant-dropdown-trigger, [data-no-row-click]',
+              )) return;
+              if (!e.data) return;
               onRowClick(e.data);
             }
           : undefined}

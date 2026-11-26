@@ -3,8 +3,10 @@ import 'server-only';
 import React from 'react';
 import { Text, View, Image, StyleSheet } from '@react-pdf/renderer';
 
-import { inr, hiDate } from './branding.js';
-import { FormPage, FormCard, FormBody, FormRow, Field, NoteBox, SignRow } from './formLayout.js';
+import { inr, docDate, todayIN } from './branding.js';
+import {
+  FormPage, FormCard, FormBody, FormRow, Field, NoteBox, SignRow, TrustInfoStrip,
+} from './formLayout.js';
 
 /**
  * सदस्यता प्रमाण पत्र — the card a member keeps.
@@ -32,51 +34,51 @@ export function MemberCertificatePdf({ trust, member, program, pageOnly = false 
   const s = sheet();
 
   const eventWord = closingWord(program);
+  const programName = program?.hiname || program?.name || member.programName || '';
+  const address = [member.village, member.district, member.state, member.pinCode]
+    .filter(Boolean)
+    .join(', ');
 
   return (
     <FormPage
       landscape
       pageOnly={pageOnly}
-      title={`${member.displayName} — सदस्यता प्रमाण पत्र`}
-      author={b.nameHi || trust?.name || ''}
+      title={`${member.displayName || ''} — सदस्यता प्रमाण पत्र`}
+      author={b.nameHi || b.nameEn || trust?.name || ''}
     >
       <FormCard
         landscape
         trust={trust}
         program={program}
-        title={program?.hiname || program?.name}
+        title={programName ? `${programName} — सदस्यता प्रमाण पत्र` : 'सदस्यता प्रमाण पत्र'}
         serial={member.registrationNumber || ''}
       >
         <View style={s.main}>
           <FormBody style={s.fields}>
             <FormRow>
               <Field big label="सदस्यता क्रमांक:" value={member.registrationNumber} />
-              <Field big label="दिनांक:" value={member.joinDate || hiDate(member.joinDateMs)} />
+              <Field big label="सदस्यता दिनांक:" value={docDate(member.joinDateMs, member.joinDate)} />
             </FormRow>
 
             <FormRow>
               <Field big flex={1.3} label="नाम:" value={member.displayName} />
-              <Field big label="पिता / पति का नाम:" value={member.fatherName} />
+              <Field big label="पिता / पति:" value={member.fatherName} />
             </FormRow>
 
             <FormRow>
               <Field big label="गोत्र:" value={member.gotra} />
               <Field big label="जाति:" value={member.jati} />
-              <Field big label="जन्म दि.:" value={member.bobDate || hiDate(member.bobDateMs)} />
+              <Field big label="जन्म दि.:" value={docDate(member.bobDateMs, member.bobDate)} />
             </FormRow>
 
             <FormRow>
-              <Field big label="मोबाईल नंबर:" value={member.phone} />
-              <Field big label="गाँव / शहर:" value={member.village} />
+              <Field big label="मोबाइल नं.:" value={member.phone} />
+              <Field big flex={1.6} label="पता:" value={address} />
             </FormRow>
 
             <FormRow>
-              <Field big label="जिला:" value={member.district} />
-              <Field big label="राज्य:" value={member.state} />
-            </FormRow>
-
-            <FormRow>
-              <Field big label="वारिसदार:" value={member.guardian} />
+              <Field big flex={1.3} label="वारिसदार:" value={member.guardian} />
+              <Field big label="संबंध:" value={member.guardianRelation} />
               <Field big label="आयु वर्ग:" value={member.ageGroupRange} />
             </FormRow>
 
@@ -98,11 +100,14 @@ export function MemberCertificatePdf({ trust, member, program, pageOnly = false 
                 <Text style={s.photoLabel}>सदस्य{'\n'}फोटो</Text>
               )}
             </View>
-            <Text style={s.photoCaption}>{member.programName || ''}</Text>
+            <Text style={s.photoCaption}>{programName}</Text>
+            <Text style={s.photoCaption}>जारी दिनांक: {todayIN()}</Text>
           </View>
         </View>
 
         <NoteBox text={program?.noteLine} />
+
+        <TrustInfoStrip trust={trust} />
 
         <SignRow trust={trust} member={member} />
       </FormCard>

@@ -74,12 +74,12 @@ export const GET = handler(async (request) => {
   const programIds = [...new Set(members.map((m) => m.programId).filter(Boolean))];
   const agentIds = [...new Set(members.map((m) => m.agentId).filter(Boolean))];
 
-  const [trust, programs, agentPhones, [{ renderPdf }, mod, { MemberDocumentsPdf }]] = await Promise.all([
+  const [trust, programs, agents, [{ renderPdf }, mod, { MemberDocumentsPdf }]] = await Promise.all([
     getTrust(scope),
     // A योजना that has since been removed still prints, without its line.
     Promise.all(programIds.map((pid) => getProgram(scope, pid).catch(() => null)))
       .then((list) => new Map(programIds.map((pid, i) => [pid, list[i]]))),
-    agentPhonesFor(scope.trustId, agentIds),
+    agentsFor(scope.trustId, agentIds),
     Promise.all([
       import('../../../../server/pdf/renderer.js'),
       doc.module(),
@@ -88,7 +88,7 @@ export const GET = handler(async (request) => {
   ]);
 
   const items = members.map((m) => ({
-    member: { ...m, agentPhone: agentPhones.get(m.agentId) ?? '' },
+    member: { ...m, agent: agents.get(m.agentId) ?? null, agentPhone: agents.get(m.agentId)?.phone ?? '' },
     program: programs.get(m.programId) ?? null,
   }));
 
@@ -107,17 +107,24 @@ export const GET = handler(async (request) => {
   return response;
 });
 
-/** Agents' phones for the signature line, in one read. */
-async function agentPhonesFor(trustId, agentIds) {
+/** The agents' live name and phone for the certificate, in one read. */
+async function agentsFor(trustId, agentIds) {
   const map = new Map();
   if (!agentIds.length) return map;
   try {
     const snaps = await db.getAll(...agentIds.map((id) => db.doc(paths.agent(trustId, id))));
     for (const snap of snaps) {
-      if (snap.exists) map.set(snap.id, snap.data().phone ?? '');
+      if (!snap.exists) continue;
+      const a = snap.data();
+      map.set(snap.id, {
+        displayName: a.displayName ?? '',
+        phone: a.phone ?? '',
+        village: a.village ?? '',
+        city: a.city ?? '',
+      });
     }
   } catch {
-    // A missing phone is not worth failing a print run over.
+    // A missing agent is not worth failing a print run over.
   }
   return map;
 }

@@ -97,12 +97,44 @@ export function addressLine(b = {}) {
 export const inr = (n) =>
   `₹${Number(n || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 
-export const hiDate = (ms) =>
-  ms
-    ? new Date(Number(ms)).toLocaleDateString('hi-IN', {
-        day: '2-digit', month: '2-digit', year: 'numeric',
-      })
-    : '—';
+/**
+ * `05/01/2025` — always in India time.
+ *
+ * The server runs in UTC. A date picked as "5 Jan" in the browser is stored as
+ * IST midnight, which is 18:30 on 4 Jan in UTC — so without the explicit zone
+ * every join date and birth date printed one day early.
+ */
+export const hiDate = (ms) => {
+  if (ms === null || ms === undefined || ms === '') return '—';
+  const d = new Date(Number(ms));
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-GB', {
+    day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Asia/Kolkata',
+  });
+};
+
+/**
+ * A date for a printed sheet: the stored millis first, the typed string only
+ * when there are no millis.
+ *
+ * The string fields (`joinDate`, `bobDate`) are whatever the form sent — an
+ * ISO `2025-01-05` from a date input, a `05-01-2025` from an import — so
+ * printing them as-is put three different formats on three certificates. The
+ * millis are the value the ledger actually uses, so they win.
+ */
+export const docDate = (ms, text) => {
+  if (ms !== null && ms !== undefined && ms !== '' && Number.isFinite(Number(ms))) {
+    return hiDate(ms);
+  }
+  const raw = String(text ?? '').trim();
+  if (!raw) return '—';
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
+  return raw.replace(/[-.]/g, '/');
+};
+
+/** Today in India, for "जारी दिनांक". */
+export const todayIN = () => hiDate(Date.now());
 
 function headerStyles(primary, compact) {
   return StyleSheet.create({

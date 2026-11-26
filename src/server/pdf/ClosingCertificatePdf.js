@@ -4,7 +4,7 @@ import React from 'react';
 import { Text, View, Image, StyleSheet } from '@react-pdf/renderer';
 
 import { inr, hiDate } from './branding.js';
-import { FormPage, FormCard, FormBody, FormRow, Field, NoteBox } from './formLayout.js';
+import { FormPage, FormCard, FormBody, FormRow, Field, NoteBox, agentLabelOf } from './formLayout.js';
 import { amountInWords } from '../../lib/amountWords.js';
 import { DEFAULT_PRIMARY, DEFAULT_ACCENT } from '../../lib/theme.js';
 
@@ -162,7 +162,7 @@ export function ClosingCertificatePdf({ trust, program, closing, member }) {
             with only the trust's own signature on it is not a receipt. */}
         <View style={s.signRow}>
           <Sign s={s} label="वारिसदार हस्ताक्षर" />
-          <Sign s={s} label="कार्यकर्ता हस्ताक्षर" name={closing.addedByName || member?.agentName} />
+          <Sign s={s} label={`${agentLabelOf(trust)} हस्ताक्षर`} name={closing.addedByName || member?.agentName} />
           <Sign
             s={s}
             label={`${b.signatoryDesignation || 'संस्थापक'} हस्ताक्षर`}

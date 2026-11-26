@@ -30,7 +30,7 @@ const { Text } = Typography;
  * The old drawer rebuilt this by reading every one of that member's ~500
  * `payment_pending` documents, and did it again on every reopen.
  */
-export default function MemberDetailsDrawer({ memberId, open, onClose, onEdit }) {
+export default function MemberDetailsDrawer({ memberId, initialMember = null, open, onClose, onEdit }) {
   const { modal, message } = App.useApp();
   const t = useT();
   // On a phone the drawer is the whole screen and the actions sit under the
@@ -50,7 +50,28 @@ export default function MemberDetailsDrawer({ memberId, open, onClose, onEdit })
     enabled: open && Boolean(memberId),
   });
 
-  const member = data?.member;
+  /**
+   * If the ledger cannot be built (an old closing index, a network blip), the
+   * member's own record is still worth showing — fetched on its own so the
+   * drawer never opens to nothing but a red error.
+   */
+  const fallback = useQuery({
+    queryKey: ['member', memberId],
+    queryFn: () => api.members.get(memberId),
+    enabled: open && Boolean(memberId) && Boolean(error),
+    retry: 1,
+  });
+
+  /**
+   * The row that was clicked is shown at once — name, photo, phone, village
+   * are already in the grid — and replaced by the full record when it lands.
+   * Before, a click opened an empty drawer with a spinner for as long as the
+   * ledger took, which read as "the click did nothing".
+   */
+  const rowMember = initialMember && initialMember.id === memberId ? initialMember : null;
+  const member = data?.member ?? fallback.data?.member ?? rowMember;
+  const fullLoaded = Boolean(data?.member ?? fallback.data?.member);
+  const loadingFull = isLoading || (Boolean(error) && fallback.isLoading);
 
   function refresh() {
     queryClient.invalidateQueries({ queryKey: keys.memberLedger(memberId) });
@@ -172,7 +193,9 @@ export default function MemberDetailsDrawer({ memberId, open, onClose, onEdit })
         <Button
           icon={<EditOutlined />}
           onClick={() => onEdit?.(member)}
-          disabled={member.delete_flag}
+          // Not on the row's partial copy: editing it would save blanks over
+          // the fields the grid does not carry.
+          disabled={member.delete_flag || !fullLoaded}
         >
           {t('संपादित')}
         </Button>
@@ -404,7 +427,7 @@ export default function MemberDetailsDrawer({ memberId, open, onClose, onEdit })
     {
       key: 'ledger',
       label: <span><WalletOutlined /> {t('क्लोजिंग और भुगतान')}</span>,
-      children: <LedgerTab data={data} />,
+      children: <LedgerTab data={data} loading={isLoading} />,
     },
     {
       key: 'login',
@@ -423,8 +446,21 @@ export default function MemberDetailsDrawer({ memberId, open, onClose, onEdit })
       destroyOnHidden
       styles={{ body: { paddingTop: 12 } }}
     >
-      {isLoading && <Spin style={{ display: 'block', margin: '48px auto' }} />}
-      {error && <Alert type="error" showIcon message={error.message} />}
+      {loadingFull && !member && <Spin style={{ display: 'block', margin: '48px auto' }} />}
+      {loadingFull && member && (
+        <div style={{ marginBottom: 8 }}>
+          <Spin size="small" /> <Text type="secondary" style={{ fontSize: 12 }}>{t('पूरी जानकारी लोड हो रही है…')}</Text>
+        </div>
+      )}
+      {error && (
+        <Alert
+          type={member ? 'warning' : 'error'}
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={member ? t('भुगतान विवरण लोड नहीं हुआ — बाकी जानकारी नीचे है') : error.message}
+          description={member ? error.message : null}
+        />
+      )}
 
       {member?.delete_flag && (
         <Alert
@@ -444,9 +480,14 @@ export default function MemberDetailsDrawer({ memberId, open, onClose, onEdit })
 
 /* ── the ledger tab ─────────────────────────────────────────────────────── */
 
-function LedgerTab({ data }) {
-  if (!data) return null;
+function LedgerTab({ data, loading }) {
+  // The hook first: returning before it changes the number of hooks between
+  // renders, and React throws the moment the data arrives.
   const t = useT();
+  if (!data && loading) return <Spin style={{ display: 'block', margin: '32px auto' }} />;
+  if (!data) {
+    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t('भुगतान विवरण उपलब्ध नहीं')} />;
+  }
 
   return (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
